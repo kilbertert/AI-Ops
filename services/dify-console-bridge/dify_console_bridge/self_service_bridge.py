@@ -119,6 +119,10 @@ _WIZARD_ACTIONS = frozenset(
         "self_validate",
         "publish_environment",
         "post_publish_smoke",
+        "release_overview",
+        "release_probe",
+        "environment_upgrade",
+        "environment_rollback",
     }
 )
 

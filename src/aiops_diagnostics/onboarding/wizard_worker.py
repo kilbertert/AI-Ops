@@ -21,16 +21,19 @@ import hashlib
 import ipaddress
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
-from aiops_diagnostics.onboarding import artifact_pool, public_smoke
+from aiops_diagnostics.onboarding import artifact_pool, public_smoke, release_governance
 
 LOCKED_NODE_JAR_ON_41 = "/opt/aiops-node-runtime/aiops-execution-node-bb51c98c.jar"
 HOST_36_ALLOWLIST = "/etc/aiops-dify-api/allowed-sources.conf"
@@ -1535,7 +1538,7 @@ def execute_publish_environment_job(
     return request(
         {
             "wizard_job": "complete",
-            "job_id": job_id,
+            "job_id": str(job["job_id"]),
             "passed": True,
             "steps": steps,
             "result": {
@@ -1548,25 +1551,1009 @@ def execute_publish_environment_job(
     )
 
 
+_LAST_RELEASE_CATALOG_DIGEST = ""
+
+
+def _read_pool_entries_from_central(root: Path, central_target: str) -> list[dict[str, Any]]:
+    pool_remote = "/var/lib/aiops-41/onboarding-assets/artifact-pool.json"
+    try:
+        proc = subprocess.run(
+            ["dev-host", "read", central_target, pool_remote],
+            cwd=str(root),
+            capture_output=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return []
+    try:
+        parsed = json.loads(proc.stdout.decode("utf-8"))
+        entries = parsed.get("entries") if isinstance(parsed, dict) else None
+        return list(entries) if isinstance(entries, list) else []
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return []
+
+
+def sync_release_catalog_to_central(
+    root: Path,
+    central_target: str,
+    *,
+    request: Callable[[dict[str, Any]], dict[str, Any]],
+    fetch_tags: bool = True,
+) -> list[dict[str, Any]]:
+    """从受保护 origin/main 收集正式注释 SemVer 标签并同步至 41 控制面目录。"""
+    global _LAST_RELEASE_CATALOG_DIGEST
+    if fetch_tags:
+        with suppress(subprocess.SubprocessError, OSError):
+            subprocess.run(
+                ["git", "fetch", "--tags", "origin", "main", "--quiet"],
+                cwd=str(root),
+                capture_output=True,
+                timeout=30,
+            )
+    pool_entries = _read_pool_entries_from_central(root, central_target) if central_target else []
+    entries = release_governance.collect_git_annotated_releases(root, pool_entries=pool_entries)
+    digest = hashlib.sha256(json.dumps(entries, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+    if entries and digest != _LAST_RELEASE_CATALOG_DIGEST:
+        request({"wizard_job": "save_release_catalog", "entries": entries})
+        _LAST_RELEASE_CATALOG_DIGEST = digest
+    return entries
+
+
+def _render_revision_user_ingress(
+    root: Path,
+    revision: str,
+    env: str,
+    local_port: int,
+) -> dict[str, Any]:
+    """从指定已合并修订提取并渲染客户侧受控 Nginx 用户入口文件与模板规范化摘要。"""
+    conf_proc = subprocess.run(
+        ["git", "show", f"{revision}:ops/nginx/environment-user-ingress.conf"],
+        cwd=str(root),
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=15,
+    )
+    inc_proc = subprocess.run(
+        ["git", "show", f"{revision}:ops/nginx/environment-user-ingress-proxy.inc"],
+        cwd=str(root),
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=15,
+    )
+    routes_proc = subprocess.run(
+        ["git", "show", f"{revision}:ops/nginx/environment-user-ingress-routes.txt"],
+        cwd=str(root),
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    tpl_conf = conf_proc.stdout
+    tpl_inc = inc_proc.stdout
+    template_sha256 = release_governance.render_ingress_sha256(tpl_conf, tpl_inc)
+    rendered_conf = tpl_conf.replace("__ENV__", env).replace(
+        "http://127.0.0.1:8788", f"http://127.0.0.1:{local_port}"
+    )
+    rendered_inc = tpl_inc.replace("http://127.0.0.1:8788", f"http://127.0.0.1:{local_port}")
+    routes = (
+        release_governance.parse_ingress_routes_text(routes_proc.stdout)
+        if routes_proc.returncode == 0
+        else []
+    )
+    return {
+        "user_conf": rendered_conf,
+        "proxy_inc": rendered_inc,
+        "routes": routes,
+        "template_sha256": template_sha256,
+    }
+
+
+def _match_routes_by_nginx_locations(user_conf: str) -> list[str]:
+    locations = re.findall(r"^\s*location\s+(?:=|\^~)\s+(/v1/[^\s{]+)", user_conf, re.MULTILINE)
+    return [f"NGINX {loc}" for loc in locations]
+
+
+def _probe_customer_release_state(
+    pinned_host: PinnedCustomerHost,
+    env: str,
+    api_domain: str,
+    catalog_entries: list[dict[str, Any]],
+) -> dict[str, Any]:
+    probe_py = "\n".join(
+        [
+            "import json, os, subprocess, urllib.request",
+            "from pathlib import Path",
+            f"env = {env!r}",
+            f"api_domain = {api_domain!r}",
+            "root = Path(f'/opt/aiops-access-{env}')",
+            "inst_f = root / 'installed.json'",
+            "inst = json.loads(inst_f.read_text(encoding='utf-8')) if inst_f.is_file() else {}",
+            "port = int(inst.get('port') or 8788)",
+            "cur = root / 'current'",
+            "cur_real = os.path.realpath(cur) if cur.exists() else ''",
+            "cur_is_link = cur.is_symlink()",
+            "py_bin = root / 'current/venv/bin/python'",
+            "py_minor = ''",
+            "pkg_ver = ''",
+            "if py_bin.is_file():",
+            "    code = 'import json,sys,aiops_diagnostics; '",
+            '    code += \'print(json.dumps({"m": f"{sys.version_info.major}.{sys.version_info.minor}", \'',
+            "    code += '\"v\": aiops_diagnostics.__version__}))'",
+            "    out = subprocess.check_output([str(py_bin), '-c', code], text=True).strip()",
+            "    info = json.loads(out)",
+            "    py_minor = info.get('m', '')",
+            "    pkg_ver = info.get('v', '')",
+            "health = {}",
+            "try:",
+            "    with urllib.request.urlopen(f'http://127.0.0.1:{port}/health', timeout=5) as r:",
+            "        health = json.loads(r.read().decode('utf-8'))",
+            "except Exception:",
+            "    health = {}",
+            "ext = Path(f'/www/server/panel/vhost/nginx/extension/{api_domain}') if api_domain else None",
+            "uconf_p = (ext / 'aiops-user-ingress.conf') if ext else None",
+            "pinc_p = Path(f'/etc/aiops-access-{env}/environment-user-ingress-proxy.inc')",
+            "uconf_txt = uconf_p.read_text(encoding='utf-8') if uconf_p and uconf_p.is_file() else ''",
+            "pinc_txt = pinc_p.read_text(encoding='utf-8') if pinc_p.is_file() else ''",
+            "prev = inst.get('previous_release')",
+            "prev = prev if isinstance(prev, dict) else None",
+            "prev_dir = str((prev or {}).get('release_dir') or '')",
+            "prev_dir_ok = bool(prev and prev_dir and Path(prev_dir).is_dir())",
+            "print(json.dumps({",
+            "  'port': port,",
+            "  'current_is_symlink': cur_is_link,",
+            "  'current_release_dir': cur_real,",
+            "  'current_release_name': Path(cur_real).name if cur_real else '',",
+            "  'installed_version': str(inst.get('version') or pkg_ver),",
+            "  'installed_revision': str(inst.get('revision') or ''),",
+            "  'python_minor': py_minor,",
+            "  'health': health,",
+            "  'user_conf': uconf_txt,",
+            "  'proxy_inc': pinc_txt,",
+            "  'previous_release': prev if prev_dir_ok else None,",
+            "}))",
+        ]
+    )
+    res = pinned_host.run_cmd(f"python3 -c {shlex.quote(probe_py)}", timeout_sec=30)
+    if res.returncode != 0 or not res.stdout.strip():
+        raise WizardWorkerError("TARGET_RELEASE_PROBE_FAILED")
+    raw = json.loads(res.stdout.strip().splitlines()[-1])
+    port = int(raw.get("port") or 8788)
+    uconf = str(raw.get("user_conf") or "")
+    pinc = str(raw.get("proxy_inc") or "")
+    norm_conf = (
+        uconf.replace(f"/etc/aiops-access-{env}/", "/etc/aiops-access-__ENV__/")
+        .replace(f"（环境 {env}）", "（环境 __ENV__）")
+        .replace(f"http://127.0.0.1:{port}", "http://127.0.0.1:8788")
+    )
+    norm_inc = pinc.replace(f"http://127.0.0.1:{port}", "http://127.0.0.1:8788")
+    norm_sha = release_governance.render_ingress_sha256(norm_conf, norm_inc) if uconf and pinc else ""
+
+    health = raw.get("health") if isinstance(raw.get("health"), dict) else {}
+    cur_ver = str(health.get("version") or raw.get("installed_version") or "")
+    cur_rev = str(raw.get("installed_revision") or "")
+    if not cur_rev and "+" in cur_ver:
+        cur_rev = cur_ver.split("+", 1)[1].strip()
+
+    matched_entry = next(
+        (e for e in catalog_entries if norm_sha and e.get("ingress_sha256") == norm_sha),
+        None,
+    )
+    if matched_entry is None and cur_rev:
+        matched_entry = next(
+            (e for e in catalog_entries if str(e.get("revision") or "").startswith(cur_rev[:12])),
+            None,
+        )
+    routes = (
+        list(matched_entry.get("ingress_routes") or [])
+        if matched_entry
+        else _match_routes_by_nginx_locations(uconf)
+    )
+    prev = raw.get("previous_release")
+    rollback_target = None
+    if isinstance(prev, dict) and prev.get("version"):
+        rollback_target = {
+            "version": str(prev.get("version") or ""),
+            "revision": str(prev.get("revision") or ""),
+            "release_name": Path(str(prev.get("release_dir") or "")).name,
+            "recorded_at": prev.get("recorded_at"),
+            "has_nginx_backup": bool(prev.get("nginx_backup_dir")),
+        }
+
+    return {
+        "port": port,
+        "current_is_symlink": bool(raw.get("current_is_symlink")),
+        "current_release_name": str(raw.get("current_release_name") or ""),
+        "current_version": cur_ver,
+        "current_revision": cur_rev,
+        "python_minor": str(raw.get("python_minor") or "3.12") or "3.12",
+        "health_ok": bool(health.get("ok")),
+        "business_mutations": str(health.get("business_mutations") or ""),
+        "current_ingress_sha256": norm_sha,
+        "current_ingress_routes": routes,
+        "rollback_target": rollback_target,
+    }
+
+
+def _persist_release_state(
+    request: Callable[[dict[str, Any]], dict[str, Any]],
+    env: str,
+    probe_data: dict[str, Any],
+) -> None:
+    request(
+        {
+            "wizard_job": "save_release_state",
+            "environment": env,
+            "state": {
+                "current_version": probe_data["current_version"],
+                "current_revision": probe_data["current_revision"],
+                "python_minor": probe_data["python_minor"],
+                "health_ok": probe_data["health_ok"],
+                "business_mutations": probe_data["business_mutations"],
+                "current_ingress_sha256": probe_data["current_ingress_sha256"],
+                "current_ingress_routes": probe_data["current_ingress_routes"],
+                "rollback_target": probe_data["rollback_target"],
+                "last_probed_at": time.time(),
+            },
+        }
+    )
+
+
+def execute_release_probe_job(
+    root: Path,
+    central_target: str,
+    job: dict[str, Any],
+    *,
+    request: Callable[[dict[str, Any]], dict[str, Any]],
+    pinned_factory: Callable[..., PinnedCustomerHost] | None = None,
+) -> dict[str, Any]:
+    """只读探测客户机线上运行版本、Python 小版本、Nginx 入口哈希与可回滚目标。"""
+    job_id = str(job["job_id"])
+    req = dict(job.get("request") or {})
+    env = str(job["environment"])
+    steps = [{"step": "probe_target", "state": "running", "reason": ""}]
+    request(
+        {
+            "wizard_job": "progress",
+            "job_id": job_id,
+            "step": "probe_target",
+            "step_state": "running",
+            "steps": steps,
+        }
+    )
+    try:
+        catalog = sync_release_catalog_to_central(root, central_target, request=request)
+        pinned_host = (pinned_factory or PinnedCustomerHost.from_central)(central_target, env, cwd=root)
+        probe_data = _probe_customer_release_state(
+            pinned_host,
+            env,
+            str(req.get("api_domain") or ""),
+            catalog,
+        )
+        _persist_release_state(request, env, probe_data)
+    except Exception as exc:
+        reason = str(exc).strip()[:120] or "TARGET_RELEASE_PROBE_FAILED"
+        steps[0]["state"] = "failed"
+        steps[0]["reason"] = reason
+        return request(
+            {
+                "wizard_job": "complete",
+                "job_id": job_id,
+                "passed": False,
+                "error_code": reason,
+                "failed_step": "probe_target",
+                "steps": steps,
+            }
+        )
+
+    steps[0]["state"] = "passed"
+    return request(
+        {
+            "wizard_job": "complete",
+            "job_id": job_id,
+            "passed": True,
+            "steps": steps,
+            "result": {
+                "current_version": probe_data["current_version"],
+                "current_revision": probe_data["current_revision"],
+                "python_minor": probe_data["python_minor"],
+                "health_ok": probe_data["health_ok"],
+                "business_mutations": probe_data["business_mutations"],
+            },
+        }
+    )
+
+
+def execute_environment_upgrade_job(
+    root: Path,
+    central_target: str,
+    job: dict[str, Any],
+    *,
+    request: Callable[[dict[str, Any]], dict[str, Any]],
+    pinned_factory: Callable[..., PinnedCustomerHost] | None = None,
+    public_smoke_fn: Callable[[str, str], dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """执行已上线客户环境无损原地滚动升级（含隔离 venv、Nginx 同步、零触碰核验与失败自回滚）。"""
+    job_id = str(job["job_id"])
+    req = dict(job.get("request") or {})
+    env = str(job["environment"])
+    target_tag = str(req.get("target_tag") or "").strip()
+    target_rev = str(req.get("target_revision") or "").strip()
+    target_full_version = str(req.get("target_full_version") or "").strip()
+    gateway_url = str(req.get("gateway_url") or "").strip()
+    api_domain = str(req.get("api_domain") or "").strip()
+    tenant_id = str(req.get("tenant_id") or "").strip()
+
+    steps = [
+        {"step": name, "state": "pending", "reason": ""}
+        for name in (
+            "resolve_artifact",
+            "install_release",
+            "sync_nginx_ingress",
+            "switch_and_verify",
+            "public_smoke",
+        )
+    ]
+
+    def _update(idx: int, state: str, reason: str = "") -> None:
+        steps[idx]["state"] = state
+        steps[idx]["reason"] = reason
+        request(
+            {
+                "wizard_job": "progress",
+                "job_id": job_id,
+                "step": steps[idx]["step"],
+                "step_state": state,
+                "steps": steps,
+            }
+        )
+
+    def _fail(idx: int, code: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+        _update(idx, "failed", code)
+        return request(
+            {
+                "wizard_job": "complete",
+                "job_id": job_id,
+                "passed": False,
+                "error_code": code,
+                "failed_step": steps[idx]["step"],
+                "steps": steps,
+                "result": dict(extra or {}),
+            }
+        )
+
+    def _err(exc: Exception, default: str) -> str:
+        return (str(exc).strip()[:120] or default) if isinstance(exc, WizardWorkerError) else default
+
+    # Step 0: 校验不可变注释标签 + 探测目标机 + 匹配/构建离线包与 Nginx 模板
+    _update(0, "running")
+    try:
+        if not release_governance.is_valid_release_tag(target_tag):
+            raise WizardWorkerError("ENVIRONMENT_RELEASE_TAG_INVALID")
+        tag_type = subprocess.run(
+            ["git", "cat-file", "-t", target_tag], cwd=str(root), capture_output=True, text=True, timeout=15
+        )
+        if tag_type.returncode != 0 or tag_type.stdout.strip() != "tag":
+            raise WizardWorkerError("ENVIRONMENT_RELEASE_TAG_NOT_ANNOTATED")
+        resolved_rev = subprocess.run(
+            ["git", "rev-parse", "--verify", f"{target_tag}^{{commit}}"],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if resolved_rev.returncode != 0 or (target_rev and resolved_rev.stdout.strip().lower() != target_rev):
+            raise WizardWorkerError("ENVIRONMENT_RELEASE_REVISION_MISMATCH")
+        target_rev = resolved_rev.stdout.strip().lower()
+        anc = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", target_rev, "origin/main"],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if anc.returncode != 0:
+            raise WizardWorkerError("ENVIRONMENT_RELEASE_NOT_ON_MAIN")
+
+        catalog = sync_release_catalog_to_central(root, central_target, request=request, fetch_tags=False)
+        pinned_host = (pinned_factory or PinnedCustomerHost.from_central)(central_target, env, cwd=root)
+        before_probe = _probe_customer_release_state(pinned_host, env, api_domain, catalog)
+        if not before_probe["current_is_symlink"]:
+            raise WizardWorkerError("TARGET_CURRENT_NOT_SYMLINK")
+        local_port = int(before_probe["port"])
+        python_minor = str(before_probe["python_minor"] or "3.12")
+        if python_minor not in artifact_pool.SUPPORTED_PYTHON_MINORS:
+            raise WizardWorkerError("ENVIRONMENT_ARTIFACT_PYTHON_UNSUPPORTED")
+
+        pool_info = _ensure_pool_artifacts(
+            root, central_target, revision=target_rev, python_minor=python_minor
+        )
+        nginx_bundle = _render_revision_user_ingress(root, target_rev, env, local_port)
+    except Exception as exc:
+        return _fail(0, _err(exc, "RELEASE_RESOLVE_ARTIFACT_FAILED"))
+    _update(0, "passed")
+
+    stage_remote = f"/var/backups/aiops-upgrade-stage-{env}"
+    bak_dir = f"/var/backups/aiops-upgrade-bak-{env}-{job_id[-8:]}"
+    new_release_dir = f"/opt/aiops-access-{env}/releases/{target_rev[:12]}-{job_id[-8:]}"
+    protected_paths = [
+        f"/etc/aiops-access-{env}/production.env",
+        f"/etc/aiops-access-{env}/registry/environment.json",
+        f"/etc/aiops-access-{env}/nginx-user-ingress-auth.conf",
+    ]
+    pre_hashes: dict[str, str] = {}
+
+    # Step 1: 传输离线包并在隔离 releases/<rev>-<id>/venv 安装及预检版本（不切流量）
+    _update(1, "running")
+    try:
+        q_stage = shlex.quote(stage_remote)
+        pinned_host.run_cmd(
+            f"rm -rf {q_stage} && mkdir -p {q_stage} && chmod 700 {q_stage}",
+            timeout_sec=30,
+        )
+        with tempfile.TemporaryDirectory(prefix="aiops-up-scp-") as tmpdir:
+            tmp = Path(tmpdir)
+            tmp.chmod(0o700)
+            app_tar = tmp / "application.tar.gz"
+            cached = Path(pool_info.get("app_local") or "")
+            if (
+                pool_info.get("app_local")
+                and cached.is_file()
+                and hashlib.sha256(cached.read_bytes()).hexdigest() == pool_info["app_sha256"]
+            ):
+                shutil.copyfile(cached, app_tar)
+                app_tar.chmod(0o600)
+            else:
+                _dev_host_download_file(
+                    central_target,
+                    pool_info["app_remote"],
+                    app_tar,
+                    expected_sha256=pool_info["app_sha256"],
+                    cwd=root,
+                )
+            pinned_host.copy_file(app_tar, f"{stage_remote}/application.tar.gz")
+
+            for fname, txt in (
+                ("aiops-user-ingress.conf", nginx_bundle["user_conf"]),
+                ("environment-user-ingress-proxy.inc", nginx_bundle["proxy_inc"]),
+            ):
+                nf = tmp / fname
+                nf.write_text(txt, encoding="utf-8")
+                nf.chmod(0o644)
+                pinned_host.copy_file(nf, f"{stage_remote}/{fname}")
+
+        install_py = "\n".join(
+            [
+                "import hashlib, json, os, shutil, subprocess, tarfile",
+                "from pathlib import Path",
+                "os.umask(0o022)",
+                f"env = {env!r}",
+                f"app_tar = Path({stage_remote!r}) / 'application.tar.gz'",
+                f"app_sha = {pool_info['app_sha256']!r}",
+                f"target_ver = {target_full_version!r}",
+                f"py_minor = {python_minor!r}",
+                f"new_dir = Path({new_release_dir!r})",
+                f"protected = {protected_paths!r}",
+                "pre_hashes = {",
+                "    p: hashlib.sha256(Path(p).read_bytes()).hexdigest()",
+                "    for p in protected if Path(p).is_file()",
+                "}",
+                "actual_sha = hashlib.sha256(app_tar.read_bytes()).hexdigest()",
+                "assert actual_sha == app_sha, 'ARCHIVE_SHA_MISMATCH'",
+                f"up = Path({stage_remote!r}) / 'unpacked'",
+                "up.mkdir(parents=True, exist_ok=True)",
+                "tarfile.open(app_tar, 'r:gz').extractall(up)",
+                "meta = json.loads((up / 'manifest.json').read_text(encoding='utf-8'))",
+                "assert meta['version'] == target_ver, f'VERSION_MISMATCH:{meta[\"version\"]}'",
+                "whl = str(next((up / 'wheelhouse').glob('aiops_diagnostics-*.whl')))",
+                f"cur_real = Path(os.path.realpath('/opt/aiops-access-{env}/current'))",
+                "cur_py = cur_real / 'venv/bin/python'",
+                "base_py = ''",
+                "cands = [",
+                "    f'/usr/local/bin/python{py_minor}',",
+                "    f'/usr/bin/python{py_minor}',",
+                "    str(Path(os.path.realpath(str(cur_py))) if cur_py.exists() else ''),",
+                "]",
+                "v_cmd = 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")'",
+                "for cand in cands:",
+                "    if not cand or not Path(cand).is_file():",
+                "        continue",
+                "    try:",
+                "        vm = subprocess.check_output([cand, '-c', v_cmd], text=True).strip()",
+                "        if vm == py_minor:",
+                "            base_py = cand",
+                "            break",
+                "    except Exception:",
+                "        pass",
+                "assert base_py, f'BASE_PYTHON_NOT_FOUND:{py_minor}'",
+                "if new_dir.exists():",
+                "    shutil.rmtree(new_dir)",
+                "new_dir.mkdir(parents=True, mode=0o755)",
+                "for item in cur_real.iterdir():",
+                "    if item.name in {'venv', '__pycache__'}:",
+                "        continue",
+                "    dst = new_dir / item.name",
+                "    if item.is_dir():",
+                "        shutil.copytree(item, dst, symlinks=True)",
+                "    elif item.is_file():",
+                "        shutil.copy2(item, dst)",
+                "subprocess.run([base_py, '-m', 'venv', str(new_dir / 'venv')], check=True)",
+                "pip_bin = str(new_dir / 'venv/bin/pip')",
+                "pip_env = {'PATH': '/usr/bin:/bin', 'PIP_CONFIG_FILE': '/dev/null'}",
+                "subprocess.run([",
+                "    pip_bin, 'install', '--no-index', '--find-links',",
+                "    str(up / 'wheelhouse'), '--upgrade', '--upgrade-strategy',",
+                "    'only-if-needed', whl,",
+                "], env=pip_env, check=True)",
+                "subprocess.run([",
+                "    pip_bin, 'install', '--no-index', '--no-deps', '--force-reinstall', whl,",
+                "], env=pip_env, check=True)",
+                "ver_cmd = 'import aiops_diagnostics; print(aiops_diagnostics.__version__)'",
+                "inst_ver = subprocess.check_output([",
+                "    str(new_dir / 'venv/bin/python'), '-c', ver_cmd,",
+                "], text=True).strip()",
+                "assert inst_ver == target_ver, f'INSTALLED_VER_MISMATCH:{inst_ver}'",
+                "print(json.dumps({'pre_hashes': pre_hashes, 'old_release_dir': str(cur_real)}))",
+            ]
+        )
+        res = pinned_host.run_cmd(f"python3 -c {shlex.quote(install_py)}", timeout_sec=240)
+        if res.returncode != 0 or not res.stdout.strip():
+            raise WizardWorkerError("TARGET_ISOLATED_INSTALL_FAILED")
+        install_info = json.loads(res.stdout.strip().splitlines()[-1])
+        pre_hashes = dict(install_info.get("pre_hashes") or {})
+        old_release_dir = str(install_info.get("old_release_dir") or "")
+    except Exception as exc:
+        return _fail(1, _err(exc, "TARGET_ISOLATED_INSTALL_FAILED"))
+    _update(1, "passed")
+
+    # Step 2: 对比并同步受控 Nginx 入口文件 + nginx -t 守卫（失败自动恢复，此时尚未重启服务）
+    _update(2, "running")
+    nginx_changed = False
+    try:
+        ext_dir = f"/www/server/panel/vhost/nginx/extension/{api_domain}"
+        if api_domain:
+            sync_ngx_py = "\n".join(
+                [
+                    "import json, os, shutil, subprocess",
+                    "from pathlib import Path",
+                    f"env = {env!r}",
+                    f"stage = Path({stage_remote!r})",
+                    f"ext_dir = Path({ext_dir!r})",
+                    f"bak = Path({bak_dir!r})",
+                    "uconf_dst = ext_dir / 'aiops-user-ingress.conf'",
+                    "pinc_dst = Path(f'/etc/aiops-access-{env}/environment-user-ingress-proxy.inc')",
+                    "uconf_new = (stage / 'aiops-user-ingress.conf').read_bytes()",
+                    "pinc_new = (stage / 'environment-user-ingress-proxy.inc').read_bytes()",
+                    "uconf_cur = uconf_dst.read_bytes() if uconf_dst.is_file() else b''",
+                    "pinc_cur = pinc_dst.read_bytes() if pinc_dst.is_file() else b''",
+                    "changed = (uconf_new != uconf_cur) or (pinc_new != pinc_cur)",
+                    "nginx_bin = shutil.which('nginx') or '/www/server/nginx/sbin/nginx'",
+                    "if changed:",
+                    "    ext_dir.mkdir(parents=True, exist_ok=True)",
+                    "    bak.mkdir(parents=True, exist_ok=True)",
+                    "    os.chmod(bak, 0o700)",
+                    "    if uconf_dst.is_file():",
+                    "        shutil.copy2(uconf_dst, bak / 'aiops-user-ingress.conf')",
+                    "    if pinc_dst.is_file():",
+                    "        shutil.copy2(pinc_dst, bak / 'environment-user-ingress-proxy.inc')",
+                    "    uconf_dst.write_bytes(uconf_new)",
+                    "    os.chmod(uconf_dst, 0o644)",
+                    "    pinc_dst.write_bytes(pinc_new)",
+                    "    os.chmod(pinc_dst, 0o644)",
+                    "    chk = subprocess.run([nginx_bin, '-t'], capture_output=True, text=True)",
+                    "    if chk.returncode != 0:",
+                    "        if (bak / 'aiops-user-ingress.conf').is_file():",
+                    "            shutil.copy2(bak / 'aiops-user-ingress.conf', uconf_dst)",
+                    "        if (bak / 'environment-user-ingress-proxy.inc').is_file():",
+                    "            shutil.copy2(bak / 'environment-user-ingress-proxy.inc', pinc_dst)",
+                    "        raise SystemExit(2)",
+                    "else:",
+                    "    subprocess.run([nginx_bin, '-t'], check=True, capture_output=True, text=True)",
+                    "print(json.dumps({'nginx_changed': changed}))",
+                ]
+            )
+            ngx_res = pinned_host.run_cmd(f"python3 -c {shlex.quote(sync_ngx_py)}", timeout_sec=45)
+            if ngx_res.returncode != 0 or not ngx_res.stdout.strip():
+                raise WizardWorkerError("CUSTOMER_NGINX_SYNC_FAILED")
+            nginx_changed = bool(json.loads(ngx_res.stdout.strip().splitlines()[-1]).get("nginx_changed"))
+    except Exception as exc:
+        return _fail(2, _err(exc, "CUSTOMER_NGINX_SYNC_FAILED"))
+    _update(2, "passed")
+
+    # Step 3: 原子切换 current 软链、重启服务、/health + 零触碰 SHA 校验；任何异常自动回退
+    _update(3, "running")
+    try:
+        switch_py = "\n".join(
+            [
+                "import hashlib, json, os, shutil, subprocess, time, urllib.request",
+                "from pathlib import Path",
+                f"env = {env!r}",
+                f"port = {local_port}",
+                f"new_dir = Path({new_release_dir!r})",
+                f"old_dir = Path({old_release_dir!r})",
+                f"bak_dir = Path({bak_dir!r})",
+                f"api_domain = {api_domain!r}",
+                f"target_ver = {target_full_version!r}",
+                f"target_rev = {target_rev!r}",
+                f"app_sha = {pool_info['app_sha256']!r}",
+                f"nginx_changed = {nginx_changed!r}",
+                f"pre_hashes = {pre_hashes!r}",
+                f"stage = Path({stage_remote!r})",
+                "root = Path(f'/opt/aiops-access-{env}')",
+                "cur_link = root / 'current'",
+                "inst_f = root / 'installed.json'",
+                "old_inst = json.loads(inst_f.read_text(encoding='utf-8')) if inst_f.is_file() else {}",
+                "svc = f'aiops-access-{env}.service'",
+                "nginx_bin = shutil.which('nginx') or '/www/server/nginx/sbin/nginx'",
+                "def swap_link(target_p: Path):",
+                "    tmp_l = root / 'current.next'",
+                "    if tmp_l.exists() or tmp_l.is_symlink():",
+                "        tmp_l.unlink()",
+                "    tmp_l.symlink_to(target_p)",
+                "    os.replace(tmp_l, cur_link)",
+                "def rollback():",
+                "    swap_link(old_dir)",
+                "    if old_inst:",
+                "        inst_f.write_text(",
+                "            json.dumps(old_inst, ensure_ascii=False) + '\\n', encoding='utf-8'",
+                "        )",
+                "    if nginx_changed and bak_dir.is_dir():",
+                "        ext_p = Path(f'/www/server/panel/vhost/nginx/extension/{api_domain}')",
+                "        uconf_dst = ext_p / 'aiops-user-ingress.conf'",
+                "        pinc_dst = Path(f'/etc/aiops-access-{env}/environment-user-ingress-proxy.inc')",
+                "        if (bak_dir / 'aiops-user-ingress.conf').is_file():",
+                "            shutil.copy2(bak_dir / 'aiops-user-ingress.conf', uconf_dst)",
+                "        if (bak_dir / 'environment-user-ingress-proxy.inc').is_file():",
+                "            shutil.copy2(bak_dir / 'environment-user-ingress-proxy.inc', pinc_dst)",
+                "        subprocess.run([nginx_bin, '-t'], check=False)",
+                "        subprocess.run([nginx_bin, '-s', 'reload'], check=False)",
+                "    subprocess.run(['systemctl', 'restart', svc], check=False)",
+                "try:",
+                "    swap_link(new_dir)",
+                "    new_inst = dict(old_inst)",
+                "    new_inst['release'] = new_dir.name",
+                "    new_inst['version'] = target_ver",
+                "    new_inst['revision'] = target_rev",
+                "    new_inst['artifact_sha256'] = app_sha",
+                "    new_inst['previous_release'] = {",
+                "        'release_dir': str(old_dir),",
+                "        'version': str(old_inst.get('version') or ''),",
+                "        'revision': str(old_inst.get('revision') or ''),",
+                "        'nginx_backup_dir': str(bak_dir) if nginx_changed else '',",
+                "        'recorded_at': time.time(),",
+                "    }",
+                "    inst_f.write_text(",
+                "        json.dumps(new_inst, ensure_ascii=False) + '\\n', encoding='utf-8'",
+                "    )",
+                "    subprocess.run(['systemctl', 'restart', svc], check=True)",
+                "    health = {}",
+                "    for _ in range(25):",
+                "        try:",
+                "            with urllib.request.urlopen(",
+                "                f'http://127.0.0.1:{port}/health', timeout=3",
+                "            ) as r:",
+                "                body = json.loads(r.read().decode('utf-8'))",
+                "                ok_h = (",
+                "                    body.get('ok') is True",
+                "                    and body.get('version') == target_ver",
+                "                    and body.get('business_mutations') == 'disabled'",
+                "                )",
+                "                if ok_h:",
+                "                    health = body",
+                "                    break",
+                "        except Exception:",
+                "            pass",
+                "        time.sleep(1)",
+                "    assert health.get('version') == target_ver, 'HEALTH_VERIFY_FAILED'",
+                "    if nginx_changed:",
+                "        subprocess.run([nginx_bin, '-s', 'reload'], check=True)",
+                "    for p, h in pre_hashes.items():",
+                "        assert Path(p).is_file(), f'CONFIG_MISSING:{p}'",
+                "        cur_h = hashlib.sha256(Path(p).read_bytes()).hexdigest()",
+                "        assert cur_h == h, f'CONFIG_MODIFIED:{p}'",
+                "    shutil.rmtree(stage, ignore_errors=True)",
+                "    print(json.dumps({",
+                "        'ok': True,",
+                "        'untouched_config_verified': True,",
+                "        'health': health,",
+                "    }))",
+                "except Exception as exc:",
+                "    rollback()",
+                "    shutil.rmtree(stage, ignore_errors=True)",
+                "    raise SystemExit(f'AUTO_ROLLED_BACK:{exc}')",
+            ]
+        )
+        sw_res = pinned_host.run_cmd(f"python3 -c {shlex.quote(switch_py)}", timeout_sec=120)
+        if sw_res.returncode != 0 or not sw_res.stdout.strip():
+            raise WizardWorkerError("TARGET_SWITCH_VERIFY_ROLLED_BACK")
+    except Exception as exc:
+        return _fail(
+            3,
+            _err(exc, "TARGET_SWITCH_VERIFY_ROLLED_BACK"),
+            {"rolled_back_automatically": True},
+        )
+    _update(3, "passed")
+
+    # Step 4: 公网 HTTPS 基础 2 项冒烟 + 回写 41 版本账本
+    _update(4, "running")
+    try:
+        smoke_fn = public_smoke_fn or public_smoke.run_post_publish_https_smoke
+        smoke_res = smoke_fn(gateway_url, tenant_id)
+        if not smoke_res.get("passed"):
+            raise WizardWorkerError("POST_UPGRADE_PUBLIC_SMOKE_FAILED")
+        after_probe = _probe_customer_release_state(pinned_host, env, api_domain, catalog)
+        _persist_release_state(request, env, after_probe)
+    except Exception as exc:
+        return _fail(4, _err(exc, "POST_UPGRADE_PUBLIC_SMOKE_FAILED"))
+    _update(4, "passed")
+
+    return request(
+        {
+            "wizard_job": "complete",
+            "job_id": job_id,
+            "passed": True,
+            "steps": steps,
+            "result": {
+                "from_version": before_probe["current_version"],
+                "to_version": after_probe["current_version"],
+                "target_tag": target_tag,
+                "nginx_changed": nginx_changed,
+                "untouched_config_verified": True,
+                "rolled_back_automatically": False,
+                "smoke_passed": True,
+                "business_mutations": after_probe["business_mutations"] or "disabled",
+                "business_accuracy": "unconfirmed",
+            },
+        }
+    )
+
+
+def execute_environment_rollback_job(
+    root: Path,
+    central_target: str,
+    job: dict[str, Any],
+    *,
+    request: Callable[[dict[str, Any]], dict[str, Any]],
+    pinned_factory: Callable[..., PinnedCustomerHost] | None = None,
+    public_smoke_fn: Callable[[str, str], dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """一键将客户机安全回滚到 installed.json 记录的上一已验证版本（含 Nginx 备份恢复）。"""
+    job_id = str(job["job_id"])
+    req = dict(job.get("request") or {})
+    env = str(job["environment"])
+    gateway_url = str(req.get("gateway_url") or "").strip()
+    api_domain = str(req.get("api_domain") or "").strip()
+    tenant_id = str(req.get("tenant_id") or "").strip()
+
+    steps = [
+        {"step": name, "state": "pending", "reason": ""}
+        for name in ("verify_previous_release", "switch_and_verify", "public_smoke")
+    ]
+
+    def _update(idx: int, state: str, reason: str = "") -> None:
+        steps[idx]["state"] = state
+        steps[idx]["reason"] = reason
+        request(
+            {
+                "wizard_job": "progress",
+                "job_id": job_id,
+                "step": steps[idx]["step"],
+                "step_state": state,
+                "steps": steps,
+            }
+        )
+
+    def _fail(idx: int, code: str) -> dict[str, Any]:
+        _update(idx, "failed", code)
+        return request(
+            {
+                "wizard_job": "complete",
+                "job_id": job_id,
+                "passed": False,
+                "error_code": code,
+                "failed_step": steps[idx]["step"],
+                "steps": steps,
+            }
+        )
+
+    def _err(exc: Exception, default: str) -> str:
+        return (str(exc).strip()[:120] or default) if isinstance(exc, WizardWorkerError) else default
+
+    _update(0, "running")
+    try:
+        catalog = sync_release_catalog_to_central(root, central_target, request=request, fetch_tags=False)
+        pinned_host = (pinned_factory or PinnedCustomerHost.from_central)(central_target, env, cwd=root)
+        before_probe = _probe_customer_release_state(pinned_host, env, api_domain, catalog)
+        local_port = int(before_probe["port"])
+        check_py = "\n".join(
+            [
+                "import json, subprocess",
+                "from pathlib import Path",
+                f"env = {env!r}",
+                "root = Path(f'/opt/aiops-access-{env}')",
+                "inst = json.loads((root / 'installed.json').read_text(encoding='utf-8'))",
+                "prev = inst.get('previous_release') or {}",
+                "prev_dir = Path(str(prev.get('release_dir') or ''))",
+                "assert prev_dir.is_dir(), 'PREVIOUS_RELEASE_MISSING'",
+                "assert (prev_dir / 'venv/bin/aiops-gateway').is_file(), 'PREVIOUS_RELEASE_MISSING'",
+                "ver_cmd = 'import aiops_diagnostics; print(aiops_diagnostics.__version__)'",
+                "prev_ver = subprocess.check_output(",
+                "    [str(prev_dir / 'venv/bin/python'), '-c', ver_cmd], text=True",
+                ").strip()",
+                "bak_raw = str(prev.get('nginx_backup_dir') or '')",
+                "print(json.dumps({",
+                "    'prev_ver': prev_ver,",
+                "    'prev_rev': str(prev.get('revision') or ''),",
+                "    'prev_dir': str(prev_dir),",
+                "    'has_nginx_bak': bool(bak_raw and Path(bak_raw).is_dir()),",
+                "}))",
+            ]
+        )
+        chk_res = pinned_host.run_cmd(f"python3 -c {shlex.quote(check_py)}", timeout_sec=30)
+        if chk_res.returncode != 0 or not chk_res.stdout.strip():
+            raise WizardWorkerError("ENVIRONMENT_ROLLBACK_UNAVAILABLE")
+        prev_info = json.loads(chk_res.stdout.strip().splitlines()[-1])
+        target_prev_ver = str(prev_info["prev_ver"])
+    except Exception as exc:
+        return _fail(0, _err(exc, "ENVIRONMENT_ROLLBACK_UNAVAILABLE"))
+    _update(0, "passed")
+
+    _update(1, "running")
+    protected_paths = [
+        f"/etc/aiops-access-{env}/production.env",
+        f"/etc/aiops-access-{env}/registry/environment.json",
+        f"/etc/aiops-access-{env}/nginx-user-ingress-auth.conf",
+    ]
+    try:
+        rb_py = "\n".join(
+            [
+                "import hashlib, json, os, shutil, subprocess, time, urllib.request",
+                "from pathlib import Path",
+                f"env = {env!r}",
+                f"port = {local_port}",
+                f"api_domain = {api_domain!r}",
+                f"target_ver = {target_prev_ver!r}",
+                f"protected = {protected_paths!r}",
+                "pre_hashes = {",
+                "    p: hashlib.sha256(Path(p).read_bytes()).hexdigest()",
+                "    for p in protected if Path(p).is_file()",
+                "}",
+                "root = Path(f'/opt/aiops-access-{env}')",
+                "cur_link = root / 'current'",
+                "inst_f = root / 'installed.json'",
+                "inst = json.loads(inst_f.read_text(encoding='utf-8'))",
+                "prev = inst['previous_release']",
+                "prev_dir = Path(str(prev['release_dir']))",
+                "bak_raw = str(prev.get('nginx_backup_dir') or '')",
+                "bak_dir = Path(bak_raw) if bak_raw else None",
+                "tmp_l = root / 'current.next'",
+                "if tmp_l.exists() or tmp_l.is_symlink():",
+                "    tmp_l.unlink()",
+                "tmp_l.symlink_to(prev_dir)",
+                "os.replace(tmp_l, cur_link)",
+                "nginx_bin = shutil.which('nginx') or '/www/server/nginx/sbin/nginx'",
+                "ngx_restored = False",
+                "if bak_dir and bak_dir.is_dir() and api_domain:",
+                "    ext_p = Path(f'/www/server/panel/vhost/nginx/extension/{api_domain}')",
+                "    uconf_dst = ext_p / 'aiops-user-ingress.conf'",
+                "    pinc_dst = Path(f'/etc/aiops-access-{env}/environment-user-ingress-proxy.inc')",
+                "    if (bak_dir / 'aiops-user-ingress.conf').is_file():",
+                "        shutil.copy2(bak_dir / 'aiops-user-ingress.conf', uconf_dst)",
+                "        ngx_restored = True",
+                "    if (bak_dir / 'environment-user-ingress-proxy.inc').is_file():",
+                "        shutil.copy2(bak_dir / 'environment-user-ingress-proxy.inc', pinc_dst)",
+                "        ngx_restored = True",
+                "    if ngx_restored:",
+                "        subprocess.run([nginx_bin, '-t'], check=True)",
+                "new_inst = dict(inst)",
+                "new_inst['release'] = prev_dir.name",
+                "new_inst['version'] = target_ver",
+                "new_inst['revision'] = str(prev.get('revision') or '')",
+                "new_inst['previous_release'] = None",
+                "inst_f.write_text(",
+                "    json.dumps(new_inst, ensure_ascii=False) + '\\n', encoding='utf-8'",
+                ")",
+                "subprocess.run(['systemctl', 'restart', f'aiops-access-{env}.service'], check=True)",
+                "health = {}",
+                "for _ in range(25):",
+                "    try:",
+                "        with urllib.request.urlopen(",
+                "            f'http://127.0.0.1:{port}/health', timeout=3",
+                "        ) as r:",
+                "            body = json.loads(r.read().decode('utf-8'))",
+                "            ok_h = (",
+                "                body.get('ok') is True",
+                "                and body.get('version') == target_ver",
+                "                and body.get('business_mutations') == 'disabled'",
+                "            )",
+                "            if ok_h:",
+                "                health = body",
+                "                break",
+                "    except Exception:",
+                "        pass",
+                "    time.sleep(1)",
+                "assert health.get('version') == target_ver, 'ROLLBACK_HEALTH_VERIFY_FAILED'",
+                "if ngx_restored:",
+                "    subprocess.run([nginx_bin, '-s', 'reload'], check=True)",
+                "for p, h in pre_hashes.items():",
+                "    assert Path(p).is_file(), f'CONFIG_MISSING:{p}'",
+                "    cur_h = hashlib.sha256(Path(p).read_bytes()).hexdigest()",
+                "    assert cur_h == h, f'CONFIG_MODIFIED:{p}'",
+                "print(json.dumps({",
+                "    'ok': True,",
+                "    'nginx_restored': ngx_restored,",
+                "    'untouched_config_verified': True,",
+                "}))",
+            ]
+        )
+        rb_res = pinned_host.run_cmd(f"python3 -c {shlex.quote(rb_py)}", timeout_sec=120)
+        if rb_res.returncode != 0 or not rb_res.stdout.strip():
+            raise WizardWorkerError("TARGET_ROLLBACK_FAILED")
+        rb_info = json.loads(rb_res.stdout.strip().splitlines()[-1])
+    except Exception as exc:
+        return _fail(1, _err(exc, "TARGET_ROLLBACK_FAILED"))
+    _update(1, "passed")
+
+    _update(2, "running")
+    try:
+        smoke_fn = public_smoke_fn or public_smoke.run_post_publish_https_smoke
+        smoke_res = smoke_fn(gateway_url, tenant_id)
+        if not smoke_res.get("passed"):
+            raise WizardWorkerError("POST_ROLLBACK_PUBLIC_SMOKE_FAILED")
+        after_probe = _probe_customer_release_state(pinned_host, env, api_domain, catalog)
+        _persist_release_state(request, env, after_probe)
+    except Exception as exc:
+        return _fail(2, _err(exc, "POST_ROLLBACK_PUBLIC_SMOKE_FAILED"))
+    _update(2, "passed")
+
+    return request(
+        {
+            "wizard_job": "complete",
+            "job_id": job_id,
+            "passed": True,
+            "steps": steps,
+            "result": {
+                "from_version": before_probe["current_version"],
+                "to_version": after_probe["current_version"],
+                "nginx_changed": bool(rb_info.get("nginx_restored")),
+                "untouched_config_verified": True,
+                "smoke_passed": True,
+                "business_mutations": after_probe["business_mutations"] or "disabled",
+                "business_accuracy": "unconfirmed",
+            },
+        }
+    )
+
+
 def run_pending_wizard_jobs(
     root: str | Path,
     central_target: str,
     *,
     request: Callable[[dict[str, Any]], dict[str, Any]],
 ) -> dict[str, Any] | None:
-    """在空闲轮询周期认领并执行下一条 V2.1 异步向导任务。"""
+    """在空闲轮询周期认领并执行下一条 V2.1/Day-2 异步向导任务。"""
+    root_path = Path(root)
+    with suppress(Exception):
+        sync_release_catalog_to_central(root_path, central_target, request=request)
     claim_resp = request({"wizard_job": "claim"})
     if not isinstance(claim_resp, dict):
         return None
     job = claim_resp.get("job")
     if not isinstance(job, dict) or not job.get("job_id"):
         return None
-    root_path = Path(root)
     action = str(job.get("action") or "")
     if action == "infra_provision":
         return execute_infra_provision_job(root_path, central_target, job, request=request)
     if action == "publish_environment":
         return execute_publish_environment_job(root_path, central_target, job, request=request)
+    if action == "release_probe":
+        return execute_release_probe_job(root_path, central_target, job, request=request)
+    if action == "environment_upgrade":
+        return execute_environment_upgrade_job(root_path, central_target, job, request=request)
+    if action == "environment_rollback":
+        return execute_environment_rollback_job(root_path, central_target, job, request=request)
     return request(
         {
             "wizard_job": "complete",

@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from aiops_diagnostics import __version__ as _PACKAGE_VERSION
 from aiops_diagnostics.common.private_files import (
     ensure_private_directory,
     validate_private_file,
@@ -37,12 +38,13 @@ from aiops_diagnostics.onboarding import (
     infra_orchestrator,
     public_smoke,
     registry,
+    release_governance,
     wizard_jobs,
     wizard_runtime,
     wizard_validation,
 )
 
-#: 必须与控制台桥 ``_WIZARD_ACTIONS`` 保持严格一致的 14 项动作白名单。
+#: 必须与控制台桥 ``_WIZARD_ACTIONS`` 保持严格一致的 18 项动作白名单。
 SUPPORTED_WIZARD_ACTIONS = frozenset(
     {
         "host_status",
@@ -59,6 +61,10 @@ SUPPORTED_WIZARD_ACTIONS = frozenset(
         "self_validate",
         "publish_environment",
         "post_publish_smoke",
+        "release_overview",
+        "release_probe",
+        "environment_upgrade",
+        "environment_rollback",
     }
 )
 
@@ -390,7 +396,13 @@ def _dispatch_infra(
         env = wp["environment"]
         job_id = wp.get("job_id")
         target_action = str(wp.get("action") or "infra_provision")
-        if target_action not in {"infra_provision", "publish_environment"}:
+        if target_action not in {
+            "infra_provision",
+            "publish_environment",
+            "release_probe",
+            "environment_upgrade",
+            "environment_rollback",
+        }:
             raise infra_orchestrator.InfraProvisionRefused("ENVIRONMENT_WIZARD_INVALID")
         if job_id is not None:
             if not isinstance(job_id, str):
@@ -703,6 +715,153 @@ def _dispatch_post_publish_smoke(wp: dict[str, Any], hooks: WizardRuntimeHooks) 
         op_tok = ""
 
 
+def _resolve_release_env_endpoints(path: str | Path, env: str) -> tuple[str, str, str]:
+    """从生效目录或最近已发布向导任务提取客户环境 HTTPS 网关地址、域名与默认租户 ID。"""
+    from urllib.parse import urlsplit
+
+    gateway_url = ""
+    tenant_id = ""
+    try:
+        body = registry.load(path)
+        for item in body.get("environments") or []:
+            if isinstance(item, dict) and str(item.get("id") or "") == env:
+                gateway_url = str(item.get("company_gateway_url") or "").strip().rstrip("/")
+                tenants = [t for t in (item.get("tenants") or []) if isinstance(t, dict)]
+                if tenants:
+                    enabled_t = next((t for t in tenants if t.get("enabled")), tenants[0])
+                    tenant_id = str(enabled_t.get("id") or "").strip()
+                break
+    except Exception:
+        pass
+    if not gateway_url:
+        infra_job = wizard_jobs.get_latest_job(path, environment=env, action="infra_provision")
+        req = (infra_job or {}).get("request") or {}
+        if isinstance(req, dict):
+            gateway_url = str(req.get("gateway_url") or "").strip().rstrip("/")
+            if not tenant_id:
+                tenant_id = str(req.get("tenant_id") or "").strip()
+    api_domain = (urlsplit(gateway_url).hostname or "") if gateway_url else ""
+    return gateway_url, api_domain, tenant_id
+
+
+def _dispatch_release_action(
+    action: str,
+    wp: dict[str, Any],
+    context: Any,
+    path: str | Path,
+    identity: tuple[str, str, str],
+) -> dict[str, Any]:
+    ctrl_ver = str(getattr(context, "version", "") or _PACKAGE_VERSION)
+    if action == "release_overview":
+        if set(wp) != {"environment"}:
+            raise release_governance.ReleaseGovernanceRefused("ENVIRONMENT_WIZARD_INVALID")
+        return release_governance.build_release_overview(
+            path,
+            wp["environment"],
+            identity=identity,
+            control_version=ctrl_ver,
+        )
+
+    if action == "release_probe":
+        if set(wp) != {"environment"}:
+            raise release_governance.ReleaseGovernanceRefused("ENVIRONMENT_WIZARD_INVALID")
+        env = wp["environment"]
+        if env == "41":
+            return {
+                "schema": wizard_jobs.JOB_STATUS_SCHEMA,
+                "environment": "41",
+                "action": "release_probe",
+                "state": "completed",
+                "passed": True,
+                "is_control": True,
+                "current_version": ctrl_ver,
+                "business_mutations": "disabled",
+                "steps": [{"step": "probe_target", "state": "passed", "reason": "control-plane-local"}],
+            }
+        _require_enrolled_host(path, identity, env)
+        gateway_url, api_domain, tenant_id = _resolve_release_env_endpoints(path, env)
+        return wizard_jobs.enqueue_job(
+            path,
+            environment=env,
+            action="release_probe",
+            request={
+                "environment": env,
+                "gateway_url": gateway_url,
+                "api_domain": api_domain,
+                "tenant_id": tenant_id,
+                "actor": identity[2],
+            },
+        )
+
+    if action == "environment_upgrade":
+        if set(wp) != {"environment", "target_tag"} or not isinstance(wp.get("target_tag"), str):
+            raise release_governance.ReleaseGovernanceRefused("ENVIRONMENT_WIZARD_INVALID")
+        env = wp["environment"]
+        if env == "41":
+            raise auth.SetupRefused("ENVIRONMENT_CONTROL_PLANE_USE_CD")
+        target_tag = wp["target_tag"].strip()
+        if not release_governance.is_valid_release_tag(target_tag):
+            raise release_governance.ReleaseGovernanceRefused("ENVIRONMENT_RELEASE_TAG_INVALID")
+        _require_enrolled_host(path, identity, env)
+        assets_dir = release_governance.assets_dir_for_registry(path)
+        catalog = release_governance.load_release_catalog(assets_dir)
+        selected = next(
+            (e for e in (catalog.get("entries") or []) if str(e.get("tag") or "") == target_tag),
+            None,
+        )
+        if selected is None:
+            raise release_governance.ReleaseGovernanceRefused("ENVIRONMENT_RELEASE_NOT_FOUND")
+        gateway_url, api_domain, tenant_id = _resolve_release_env_endpoints(path, env)
+        return wizard_jobs.enqueue_job(
+            path,
+            environment=env,
+            action="environment_upgrade",
+            request={
+                "environment": env,
+                "target_tag": target_tag,
+                "target_revision": str(selected["revision"]),
+                "target_version": str(selected["version"]),
+                "target_full_version": str(selected["full_version"]),
+                "gateway_url": gateway_url,
+                "api_domain": api_domain,
+                "tenant_id": tenant_id,
+                "actor": identity[2],
+            },
+        )
+
+    # environment_rollback
+    if set(wp) != {"environment", "confirm_rollback"} or type(wp.get("confirm_rollback")) is not bool:
+        raise release_governance.ReleaseGovernanceRefused("ENVIRONMENT_WIZARD_INVALID")
+    if wp.get("confirm_rollback") is not True:
+        raise release_governance.ReleaseGovernanceRefused("ENVIRONMENT_ROLLBACK_CONFIRM_REQUIRED")
+    env = wp["environment"]
+    if env == "41":
+        raise auth.SetupRefused("ENVIRONMENT_CONTROL_PLANE_USE_CD")
+    _require_enrolled_host(path, identity, env)
+    assets_dir = release_governance.assets_dir_for_registry(path)
+    states = release_governance.load_environment_release_states(assets_dir)
+    env_state = states.get("environments", {}).get(env) or {}
+    rollback_target = env_state.get("rollback_target")
+    if not isinstance(rollback_target, dict) or not rollback_target.get("version"):
+        raise release_governance.ReleaseGovernanceRefused("ENVIRONMENT_ROLLBACK_UNAVAILABLE")
+    gateway_url, api_domain, tenant_id = _resolve_release_env_endpoints(path, env)
+    return wizard_jobs.enqueue_job(
+        path,
+        environment=env,
+        action="environment_rollback",
+        request={
+            "environment": env,
+            "target_version": str(rollback_target.get("version") or ""),
+            "target_revision": str(rollback_target.get("revision") or ""),
+            "target_release_name": str(rollback_target.get("release_name") or ""),
+            "gateway_url": gateway_url,
+            "api_domain": api_domain,
+            "tenant_id": tenant_id,
+            "actor": identity[2],
+        },
+    )
+
+
 def dispatch_wizard(
     context: Any,
     session: Any,
@@ -756,6 +915,8 @@ def dispatch_wizard(
             return _dispatch_publish_environment(wp, path, identity, hooks)
         if action == "post_publish_smoke":
             return _dispatch_post_publish_smoke(wp, hooks)
+        if action in {"release_overview", "release_probe", "environment_upgrade", "environment_rollback"}:
+            return _dispatch_release_action(action, wp, context, path, identity)
     except host_enrollment.EnrollmentRefused as exc:
         if str(exc) == "ENVIRONMENT_HOST_FINGERPRINT_MISMATCH":
             raise SetupConflict(str(exc)) from exc
@@ -767,6 +928,7 @@ def dispatch_wizard(
         db_remediation.RemediationRefused,
         artifact_pool.ArtifactPoolRefused,
         infra_orchestrator.InfraProvisionRefused,
+        release_governance.ReleaseGovernanceRefused,
         wizard_validation.WizardValidationRefused,
         wizard_runtime.WizardRuntimeError,
     ) as exc:

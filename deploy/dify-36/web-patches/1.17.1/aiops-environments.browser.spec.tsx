@@ -2390,3 +2390,245 @@ it('点击恢复服务端进度时覆盖默认选中环境的旧预填字段', a
   expect(draft.customerName).toBe('示例客户')
   expect(draft.apiDomain).toBe('api.customer.example.com')
 })
+
+it('版本与发版页：支持控制面 41 守卫、Nginx 入口差异预览、无损升级与一键回滚', async () => {
+  let activeEnv = 'jiejia'
+  let curVer = '1.43.19+3ad573eca3eb'
+  let rollbackTarget: Record<string, unknown> | null = null
+  const releaseCalls: Array<{ action: string; payload: Record<string, unknown> }> = []
+
+  const env41 = {
+    id: '41',
+    name: '核心控制面',
+    enabled: true,
+    gateway_url: 'https://gw41.example.test',
+    cpms_base_url: 'https://cpms41.example.test',
+    company_gateway_url: 'https://api41.example.test',
+    deployment_target: 'host-41',
+    credential_ref: 'cred-41',
+    timezone: 'Asia/Shanghai',
+    tenants: [],
+  }
+  const envJiejia = {
+    ...env41,
+    id: 'jiejia',
+    name: '捷佳客户',
+    gateway_url: 'https://api.customer.example.com',
+    cpms_base_url: 'https://api.customer.example.com/cpms',
+    company_gateway_url: 'https://api.customer.example.com',
+    deployment_target: 'host-jiejia',
+    credential_ref: 'cred-jiejia',
+  }
+
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_input: unknown, init?: { body?: string }) => {
+      const body = JSON.parse(init?.body || '{}')
+      if (body.action === 'environment-drafts') {
+        return Response.json({
+          registry_revision: 30,
+          can_create: true,
+          effective: [env41, envJiejia],
+          drafts: [
+            { environment: '41', revision: 30, draft: env41, registry_changed: false },
+            { environment: 'jiejia', revision: 30, draft: envJiejia, registry_changed: false },
+          ],
+        })
+      }
+      if (body.action === 'environment-task') return Response.json({ tasks: [] })
+      if (body.action === 'environment-overview') {
+        return Response.json({
+          environments: [
+            {
+              id: '41',
+              name: '核心控制面',
+              is_control: true,
+              status: 'active',
+              enabled: true,
+              draft_revision: 30,
+              registry_changed: false,
+              tenant_count: 0,
+              enabled_tenant_count: 0,
+              active_route_count: 0,
+              nodes: [],
+              tenants: [],
+            },
+            {
+              id: 'jiejia',
+              name: '捷佳客户',
+              is_control: false,
+              status: 'active',
+              enabled: true,
+              draft_revision: 30,
+              registry_changed: false,
+              tenant_count: 0,
+              enabled_tenant_count: 0,
+              active_route_count: 0,
+              nodes: [],
+              tenants: [],
+            },
+          ],
+        })
+      }
+      if (body.action === 'environment-plan') {
+        return Response.json({
+          id: 'plan_rel_1',
+          state: 'blocked',
+          executable: false,
+          draft_revision: 30,
+          registry_revision: 30,
+          checks: [],
+        })
+      }
+      if (body.action === 'environment-wizard') {
+        const wa = body.wizard_action
+        const wp = body.wizard_payload || {}
+        releaseCalls.push({ action: wa, payload: wp })
+        activeEnv = String(wp.environment || activeEnv)
+        if (wa === 'release_overview') {
+          const isCtrl = activeEnv === '41'
+          return Response.json({
+            schema: 'aiops-release-overview/1',
+            environment: activeEnv,
+            is_control: isCtrl,
+            control_version: '1.43.20+deadbeefcafe',
+            enrolled: !isCtrl,
+            gateway_url: isCtrl ? 'https://api41.example.test' : 'https://api.customer.example.com',
+            current_version: isCtrl ? '1.43.20+deadbeefcafe' : curVer,
+            current_revision: curVer.split('+')[1] || '',
+            python_minor: '3.12',
+            business_mutations: 'disabled',
+            health_ok: true,
+            last_probed_at: 1795760000,
+            current_ingress_routes: ['GET /v1/faq/catalog'],
+            rollback_target: isCtrl ? null : rollbackTarget,
+            catalog_updated_at: 1795760000,
+            available_releases: [
+              {
+                tag: 'v1.43.20',
+                version: '1.43.20',
+                revision: 'bbbbbbbbbbbb1234567890abcdef1234567890ab',
+                short_sha: 'bbbbbbbbbbbb',
+                full_version: '1.43.20+bbbbbbbbbbbb',
+                released_at: '2026-11-27T06:50:00Z',
+                summary: 'feat(onboarding): Day-2 release upgrade & rollback UI',
+                ingress_routes: ['GET /v1/faq/catalog', 'POST /v1/health-report-jobs'],
+                ingress_diff: {
+                  changed: curVer !== '1.43.20+bbbbbbbbbbbb',
+                  added_routes: curVer === '1.43.20+bbbbbbbbbbbb' ? [] : ['POST /v1/health-report-jobs'],
+                  removed_routes: [],
+                },
+                pool_python_minors: ['3.12'],
+              },
+            ],
+            latest_release: {
+              tag: 'v1.43.20',
+              version: '1.43.20',
+              revision: 'bbbbbbbbbbbb1234567890abcdef1234567890ab',
+              short_sha: 'bbbbbbbbbbbb',
+              full_version: '1.43.20+bbbbbbbbbbbb',
+              released_at: '2026-11-27T06:50:00Z',
+              summary: 'feat(onboarding): Day-2 release upgrade & rollback UI',
+              ingress_routes: ['GET /v1/faq/catalog', 'POST /v1/health-report-jobs'],
+              ingress_diff: {
+                changed: curVer !== '1.43.20+bbbbbbbbbbbb',
+                added_routes: curVer === '1.43.20+bbbbbbbbbbbb' ? [] : ['POST /v1/health-report-jobs'],
+                removed_routes: [],
+              },
+              pool_python_minors: ['3.12'],
+            },
+            update_available: !isCtrl && curVer !== '1.43.20+bbbbbbbbbbbb',
+            history: [],
+          })
+        }
+        if (wa === 'release_probe') {
+          return Response.json({
+            job_id: 'wizjob_111122223333444455556666',
+            environment: activeEnv,
+            action: 'release_probe',
+            state: 'completed',
+            passed: true,
+            current_version: curVer,
+            steps: [{ step: 'probe_target', state: 'passed', reason: '' }],
+          })
+        }
+        if (wa === 'environment_upgrade') {
+          const prev = curVer
+          curVer = '1.43.20+bbbbbbbbbbbb'
+          rollbackTarget = {
+            version: prev,
+            revision: '3ad573eca3eb',
+            release_name: '3ad573eca3eb',
+            recorded_at: 1795760100,
+            has_nginx_backup: true,
+          }
+          return Response.json({
+            job_id: 'wizjob_aaaa1111bbbb2222cccc3333',
+            environment: activeEnv,
+            action: 'environment_upgrade',
+            state: 'completed',
+            passed: true,
+            from_version: prev,
+            to_version: curVer,
+            target_tag: 'v1.43.20',
+            nginx_changed: true,
+            untouched_config_verified: true,
+            smoke_passed: true,
+            steps: [
+              { step: 'resolve_artifact', state: 'passed' },
+              { step: 'install_release', state: 'passed' },
+              { step: 'sync_nginx_ingress', state: 'passed' },
+              { step: 'switch_and_verify', state: 'passed' },
+              { step: 'public_smoke', state: 'passed' },
+            ],
+          })
+        }
+        if (wa === 'environment_rollback') {
+          const prev = curVer
+          curVer = '1.43.19+3ad573eca3eb'
+          rollbackTarget = null
+          return Response.json({
+            job_id: 'wizjob_dddd4444eeee5555ffff6666',
+            environment: activeEnv,
+            action: 'environment_rollback',
+            state: 'completed',
+            passed: true,
+            from_version: prev,
+            to_version: curVer,
+            nginx_changed: true,
+            untouched_config_verified: true,
+            smoke_passed: true,
+            steps: [
+              { step: 'verify_previous_release', state: 'passed' },
+              { step: 'switch_and_verify', state: 'passed' },
+              { step: 'public_smoke', state: 'passed' },
+            ],
+          })
+        }
+      }
+      return Response.json({})
+    }),
+  )
+
+  const screen = await render(<EnvironmentManagement />)
+  // 默认先看 41 控制面提示（不展示自升级按钮）
+  await screen.getByRole('tab', { name: '版本与发版', exact: true }).click()
+  await expect.element(screen.getByText('控制面 41 发布说明')).toBeVisible()
+  expect(screen.getByRole('button', { name: '一键无损滚动升级' }).query()).toBeNull()
+
+  // 切换捷佳客户 -> 预览 Nginx 路由变更 -> 一键升级 -> 一键回滚
+  await screen.getByRole('button', { name: '捷佳客户（jiejia）' }).click()
+  await expect.element(screen.getByText(/1\.43\.19\+3ad573eca3eb/)).toBeVisible()
+  await expect.element(screen.getByText(/POST \/v1\/health-report-jobs/)).toBeVisible()
+
+  await screen.getByRole('button', { name: '一键无损滚动升级' }).click()
+  await screen.getByRole('button', { name: '确认执行升级' }).click()
+  await expect.element(screen.getByText(/升级完成：1\.43\.20\+bbbbbbbbbbbb 已就绪且公网冒烟通过/)).toBeVisible()
+  await expect.element(screen.getByText(/配置与数据零触碰核验：通过（SHA-256 一致）/)).toBeVisible()
+
+  await screen.getByRole('button', { name: '一键回滚至上一版本' }).click()
+  await screen.getByRole('button', { name: '确认执行回滚' }).click()
+  await expect.element(screen.getByText(/已安全回滚至上一版本 1\.43\.19\+3ad573eca3eb/)).toBeVisible()
+  expect(releaseCalls.map((c) => c.action)).toContain('environment_upgrade')
+  expect(releaseCalls.map((c) => c.action)).toContain('environment_rollback')
+})

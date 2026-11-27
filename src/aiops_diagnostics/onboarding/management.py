@@ -705,6 +705,22 @@ def register(app, context, session_dependency):
                     return wizard_provision.connect_consumer_plugin(context, reg_path, payload)
                 if job_op == "activate_registry":
                     return wizard_provision.activate_environment_registry(context, reg_path, payload)
+                if job_op == "save_release_catalog":
+                    from aiops_diagnostics.onboarding import release_governance
+
+                    assets_dir = release_governance.assets_dir_for_registry(reg_path)
+                    return release_governance.save_release_catalog(
+                        assets_dir, list(payload.get("entries") or [])
+                    )
+                if job_op == "save_release_state":
+                    from aiops_diagnostics.onboarding import release_governance
+
+                    assets_dir = release_governance.assets_dir_for_registry(reg_path)
+                    return release_governance.save_environment_release_state(
+                        assets_dir,
+                        str(payload.get("environment") or ""),
+                        dict(payload.get("state") or {}),
+                    )
                 raise environment_tasks.TaskRefused("ENVIRONMENT_TASK_WORKER_INVALID")
             if "installation_claim" in payload:
                 return dispatch_installation_claim(context, payload)

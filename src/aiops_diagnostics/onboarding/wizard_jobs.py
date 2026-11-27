@@ -32,6 +32,26 @@ PUBLISH_STEPS = (
     "sync_target_runtime",
     "activate_node_route",
 )
+RELEASE_PROBE_STEPS = ("probe_target",)
+UPGRADE_STEPS = (
+    "resolve_artifact",
+    "install_release",
+    "sync_nginx_ingress",
+    "switch_and_verify",
+    "public_smoke",
+)
+ROLLBACK_STEPS = (
+    "verify_previous_release",
+    "switch_and_verify",
+    "public_smoke",
+)
+_ACTION_STEP_MAP: dict[str, tuple[str, ...]] = {
+    "infra_provision": INFRA_STEPS,
+    "publish_environment": PUBLISH_STEPS,
+    "release_probe": RELEASE_PROBE_STEPS,
+    "environment_upgrade": UPGRADE_STEPS,
+    "environment_rollback": ROLLBACK_STEPS,
+}
 _FORBIDDEN_SECRET_PARTS = frozenset({"password", "passwd", "secret", "private_key", "token", "third_session"})
 _TERMINAL_STATES = frozenset({"completed", "failed"})
 
@@ -78,7 +98,7 @@ def sanitize_public_dict(payload: Any) -> Any:
 
 
 def _initial_steps(action: str) -> list[dict[str, Any]]:
-    names = PUBLISH_STEPS if action == "publish_environment" else INFRA_STEPS
+    names = _ACTION_STEP_MAP.get(action, INFRA_STEPS)
     return [{"step": name, "state": "pending", "reason": ""} for name in names]
 
 
@@ -119,6 +139,17 @@ def _public_row(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
             "tenant_id",
             "gateway_url",
             "published",
+            "from_version",
+            "to_version",
+            "target_tag",
+            "nginx_changed",
+            "untouched_config_verified",
+            "rolled_back_automatically",
+            "smoke_passed",
+            "current_version",
+            "current_revision",
+            "python_minor",
+            "business_mutations",
         ):
             if k in out["result"]:
                 out[k] = out["result"][k]
@@ -133,7 +164,7 @@ def enqueue_job(
     request: dict[str, Any],
 ) -> dict[str, Any]:
     """幂等入队异步向导任务；同环境同动作尚有进行中任务时复用活跃记录。"""
-    if action not in {"infra_provision", "publish_environment"}:
+    if action not in _ACTION_STEP_MAP:
         raise WizardJobError("ENVIRONMENT_WIZARD_ACTION_UNSUPPORTED")
     if contains_secret_key(request):
         raise WizardJobError("ENVIRONMENT_WIZARD_SECRET_PERSISTENCE_FORBIDDEN")
@@ -369,3 +400,34 @@ def complete_job(
         done_row = conn.execute("SELECT * FROM environment_wizard_jobs WHERE id=?", (job_id,)).fetchone()
         assert done_row is not None
         return _public_row(done_row)
+
+
+def list_jobs_for_environment(
+    registry_path: str | Path,
+    environment: str,
+    *,
+    actions: tuple[str, ...] | None = None,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """按环境倒序读取最近异步任务摘要，用于「版本与发版」审计时间线。"""
+    db_path = Path(drafts._database(str(registry_path)))
+    if not db_path.exists():
+        return []
+    bounded = max(1, min(int(limit), 50))
+    with gateway_db.initialize(db_path) as conn:
+        protect_private_file(db_path)
+        drafts.initialize_wizard_jobs(conn)
+        if actions:
+            placeholders = ",".join("?" for _ in actions)
+            rows = conn.execute(
+                f"SELECT * FROM environment_wizard_jobs WHERE environment=? AND action IN ({placeholders}) "
+                "ORDER BY updated_at DESC, created_at DESC LIMIT ?",
+                (environment, *actions, bounded),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM environment_wizard_jobs WHERE environment=? "
+                "ORDER BY updated_at DESC, created_at DESC LIMIT ?",
+                (environment, bounded),
+            ).fetchall()
+    return [_public_row(row) for row in rows]
