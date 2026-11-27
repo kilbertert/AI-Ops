@@ -519,3 +519,38 @@ def test_worker_upgrade_and_rollback_verify_zero_touch_and_auto_rollback(
     assert fail_done["passed"] is False
     assert fail_done["failed_step"] == "switch_and_verify"
     assert fail_done["rolled_back_automatically"] is True
+
+
+def test_cross_region_transfer_defaults_to_480s_and_caches_before_cp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import inspect
+
+    assert inspect.signature(wizard_worker._dev_host_cp).parameters["timeout_sec"].default == 480
+    assert (
+        inspect.signature(wizard_worker.PinnedCustomerHost.copy_file).parameters["timeout_sec"].default == 480
+    )
+
+    rev = "a" * 40
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    def fake_run(cmd, *args, **kwargs):
+        if cmd[:2] == ["bash", "ops/environments/gateway/build.sh"]:
+            Path(cmd[4]).write_bytes(b"app-tar")
+        elif cmd[:2] == ["bash", "ops/environments/gateway/build-installer.sh"]:
+            Path(cmd[3]).write_bytes(b"inst-tar")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(wizard_worker.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        wizard_worker,
+        "_dev_host_cp",
+        lambda *_a, **_kw: (_ for _ in ()).throw(wizard_worker.WizardWorkerError("DEV_HOST_CP_FAILED")),
+    )
+    with pytest.raises(wizard_worker.WizardWorkerError, match="DEV_HOST_CP_FAILED"):
+        wizard_worker._ensure_pool_artifacts(tmp_path, "41", revision=rev, python_minor="3.12")
+
+    cache_dir, app_cache, inst_cache = wizard_worker._local_pool_cache_paths(rev, "3.12")
+    assert cache_dir.is_dir()
+    assert app_cache.read_bytes() == b"app-tar"
+    assert inst_cache.read_bytes() == b"inst-tar"

@@ -189,8 +189,8 @@ export default function EnvironmentReleasesPanel({
       return initial
     }
     let latest = initial
-    for (let i = 0; i < 90; i++) {
-      await new Promise((r) => setTimeout(r, 2000))
+    for (let i = 0; i < 240; i++) {
+      await new Promise((r) => setTimeout(r, 2500))
       const polled = (await manage('environment-wizard', {
         wizard_action: 'infra_status',
         wizard_payload: {
@@ -221,6 +221,8 @@ export default function EnvironmentReleasesPanel({
       await loadOverview(environment)
       if (done?.passed) {
         setNotice(`已同步 ${environmentName || environment} 最新运行版本与 Nginx 入口状态`)
+      } else if (done?.state === 'running' || done?.state === 'queued') {
+        setNotice('后台任务仍在执行中（跨区传输离线包耗时较长），请稍候点击「刷新实时版本」查看最终结果')
       } else {
         setError(`实时版本探测失败：${done?.error_code || '请检查目标主机连通性'}`)
       }
@@ -251,6 +253,8 @@ export default function EnvironmentReleasesPanel({
         setNotice(
           `升级完成：${done.to_version || selectedTag} 已就绪且公网冒烟通过（客户配置零触碰核验通过）`,
         )
+      } else if (done?.state === 'running' || done?.state === 'queued') {
+        setNotice('后台任务仍在执行中（跨区传输离线包耗时较长），请稍候点击「刷新实时版本」查看最终结果')
       } else {
         const rbTip = done?.rolled_back_automatically ? '；系统已自动切回原版本兜底' : ''
         setError(`升级阻断（${done?.failed_step || done?.error_code || '未知错误'}）${rbTip}`)
@@ -276,6 +280,8 @@ export default function EnvironmentReleasesPanel({
       await loadOverview(environment)
       if (done?.passed) {
         setNotice(`已安全回滚至上一版本 ${done.to_version || ''} 并完成 /health 与公网冒烟校验`)
+      } else if (done?.state === 'running' || done?.state === 'queued') {
+        setNotice('后台任务仍在执行中（跨区传输离线包耗时较长），请稍候点击「刷新实时版本」查看最终结果')
       } else {
         setError(`回滚失败：${done?.failed_step || done?.error_code || '请检查主机状态'}`)
       }
