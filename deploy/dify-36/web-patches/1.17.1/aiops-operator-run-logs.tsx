@@ -6,6 +6,7 @@ import NativeLogs from '@/app/components/app/log-annotation'
 import { useStore as useAppStore } from '@/app/components/app/store'
 import { PageType } from '@/app/components/base/features/new-feature-panel/annotation-reply/type'
 import { manage, useManagedApp } from '@/service/aiops-management'
+import { LiquidGlassSurface } from './aiops-liquid-glass'
 
 type Event = {
   phase: string
@@ -248,55 +249,154 @@ export function OperatorRunLogs({ appId }: { appId: string }) {
     setQuery({ page, run, refresh: query.refresh + 1 })
   }
   return (
-    <section aria-label="Java 运行日志" className="flex h-full flex-col gap-4 overflow-auto p-6">
-      <h1 className="text-xl font-semibold">Java 运行日志</h1>
-      <p>仅显示本人在当前应用、当前权限范围内的运行记录。耗时截至最后已采集阶段。</p>
-      <div className="flex gap-2">
-        <Button onClick={() => change(query.page, query.run)}>刷新日志</Button>
-        {query.run && <Button onClick={() => change(query.page)}>返回列表</Button>}
-      </div>
-      {error && <p role="alert">{error}</p>}
-      {!result && !error && <p role="status">正在读取日志…</p>}
+    <section aria-label="Java 运行日志" className="flex h-full flex-col gap-5 overflow-auto p-6">
+      <LiquidGlassSurface
+        as="header"
+        variant="hero"
+        interactive
+        className="flex flex-wrap items-center justify-between gap-4 rounded-2xl p-5"
+      >
+        <div className="flex items-start gap-3.5">
+          <span
+            aria-hidden="true"
+            className="aiops-glass-pill flex size-10 shrink-0 items-center justify-center rounded-xl text-text-accent"
+          >
+            <span className="i-ri-terminal-box-line size-5" />
+          </span>
+          <div>
+            <h1 className="text-xl font-semibold text-text-primary">Java 运行日志</h1>
+            <p className="mt-0.5 system-xs-regular text-text-secondary">
+              仅显示本人在当前应用、当前权限范围内的运行记录。耗时截至最后已采集阶段。
+            </p>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="secondary"
+            size="small"
+            className="aiops-glass-pill-btn"
+            onClick={() => change(query.page, query.run)}
+          >
+            <span aria-hidden="true" className="mr-1.5 i-ri-refresh-line size-3.5" />
+            刷新日志
+          </Button>
+          {query.run && (
+            <Button
+              variant="primary"
+              size="small"
+              className="rounded-full!"
+              onClick={() => change(query.page)}
+            >
+              <span aria-hidden="true" className="mr-1.5 i-ri-arrow-left-line size-3.5" />
+              返回列表
+            </Button>
+          )}
+        </div>
+      </LiquidGlassSurface>
+
+      {error && (
+        <p
+          role="alert"
+          className="aiops-glass-card rounded-xl border-state-destructive-border bg-state-destructive-hover/85 px-4 py-3 system-sm-medium text-text-destructive"
+        >
+          {error}
+        </p>
+      )}
+      {!result && !error && (
+        <p
+          role="status"
+          className="aiops-glass-card rounded-xl px-4 py-3 system-sm-regular text-text-secondary"
+        >
+          正在读取日志…
+        </p>
+      )}
       {result && !query.run && (
         <>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr>
-                  <th>开始时间（UTC）</th>
-                  <th>问题</th>
-                  <th>订单号</th>
-                  <th>状态</th>
-                  <th>耗时</th>
-                  <th>详情</th>
-                </tr>
-              </thead>
-              <tbody>
-                {result.items.map((run) => (
-                  <tr key={run.run_id}>
-                    <td>{run.created_at}</td>
-                    <td title={run.question || ''}>{brief(run.question)}</td>
-                    <td>{run.order_no || '未绑定'}</td>
-                    <td>
-                      {stateLabel(run)}
-                      {run.result_expired && '（结果已过期）'}
-                    </td>
-                    <td>{elapsed(run.elapsed_ms)}</td>
-                    <td>
-                      <Button onClick={() => change(query.page, run.run_id)}>查看运行</Button>
-                    </td>
+          <LiquidGlassSurface variant="elevated" className="overflow-hidden rounded-2xl">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead className="border-b border-divider-subtle bg-background-section-burn/55 text-xs font-medium text-text-tertiary">
+                  <tr>
+                    <th className="px-4 py-3">开始时间（UTC）</th>
+                    <th className="px-4 py-3">问题</th>
+                    <th className="px-4 py-3">订单号</th>
+                    <th className="px-4 py-3">状态</th>
+                    <th className="px-4 py-3">耗时</th>
+                    <th className="px-4 py-3 text-right">详情</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {!result.items.length && <p>当前没有可见运行记录</p>}
-          <div className="flex items-center gap-2">
-            <Button disabled={query.page === 1} onClick={() => change(query.page - 1)}>
+                </thead>
+                <tbody className="divide-y divide-divider-subtle/70">
+                  {result.items.map((run) => (
+                    <tr key={run.run_id} className="transition-colors hover:bg-state-base-hover/60">
+                      <td className="px-4 py-3 font-mono text-xs whitespace-nowrap text-text-secondary tabular-nums">
+                        {run.created_at}
+                      </td>
+                      <td
+                        className="max-w-xs truncate px-4 py-3 text-text-primary"
+                        title={run.question || ''}
+                      >
+                        {brief(run.question)}
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        <span className="inline-flex rounded-md bg-background-section-burn/75 px-2 py-0.5 font-mono text-xs text-text-secondary">
+                          {run.order_no || '未绑定'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        <span
+                          className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                            run.state === 'succeeded'
+                              ? 'bg-components-badge-bg-green-soft text-text-success'
+                              : run.state === 'failed' || run.state === 'refused'
+                                ? 'bg-components-badge-bg-red-soft text-text-destructive'
+                                : 'bg-components-badge-bg-blue-light-soft text-text-accent'
+                          }`}
+                        >
+                          {stateLabel(run)}
+                          {run.result_expired && '（结果已过期）'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 font-mono text-xs whitespace-nowrap text-text-tertiary tabular-nums">
+                        {elapsed(run.elapsed_ms)}
+                      </td>
+                      <td className="px-4 py-3 text-right whitespace-nowrap">
+                        <Button
+                          variant="secondary"
+                          size="small"
+                          className="aiops-glass-pill-btn"
+                          onClick={() => change(query.page, run.run_id)}
+                        >
+                          查看运行
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {!result.items.length && (
+              <p className="px-4 py-8 text-center system-sm-regular text-text-tertiary">
+                当前没有可见运行记录
+              </p>
+            )}
+          </LiquidGlassSurface>
+          <div className="aiops-glass-card flex items-center justify-between gap-3 rounded-2xl px-4 py-2.5">
+            <Button
+              variant="secondary"
+              size="small"
+              className="aiops-glass-pill-btn"
+              disabled={query.page === 1}
+              onClick={() => change(query.page - 1)}
+            >
               上一页
             </Button>
-            <span>第 {query.page} 页</span>
+            <span className="system-xs-medium text-text-secondary tabular-nums">
+              第 {query.page} 页
+            </span>
             <Button
+              variant="secondary"
+              size="small"
+              className="aiops-glass-pill-btn"
               disabled={!result.has_more || query.page >= 1000}
               onClick={() => change(query.page + 1)}
             >
@@ -310,94 +410,128 @@ export function OperatorRunLogs({ appId }: { appId: string }) {
         result.items.map((run) => {
           const resamples = run.trace.filter((e) => e.phase === 'resample').length
           return (
-            <div key={run.run_id} className="flex flex-col gap-3">
-              <h2 className="text-base font-semibold">运行详情</h2>
-              <p>
-                问题：{run.question || '未关联'}
-              </p>
-              <p>
-                QA 引用：{run.qa_id || '未关联'} · 订单号：{run.order_no || '未绑定'} ·{' '}
-                {stateLabel(run)} · {elapsed(run.elapsed_ms)}
-              </p>
-              {run.reason && <p>终态原因：{label(run.reason)}（{run.reason}）</p>}
-              {run.review_reason && run.review_reason !== 'allowed' && (
-                <p>
-                  {/* ADR-0252：verdict 只观察不拦截——答复已交付时是复核记录，不是未完成原因 */}
-                  {run.delivery_mode === 'diagnosis' ? '复核观察（答复已交付）' : '诊断未完成原因'}：
-                  {label(run.review_reason)}
-                </p>
-              )}
-              {run.result_expired && <p>业务结果已过期，此处仅保留运行记录。</p>}
-              <p>
-                执行节点：{run.expected_node_id || '未记录'} → 实际{' '}
-                {run.actual_node_id || '未回报'}
-                {run.expected_node_id &&
-                  run.actual_node_id &&
-                  run.expected_node_id !== run.actual_node_id &&
-                  '（不一致）'}
-                {` · 环境：${run.environment || '未记录'} · 语言：${run.language || '未记录'}`}
-                {run.trial && ' · 试用'}
-              </p>
-              <p>
-                版本：{run.agent_version || '未核对'} · 节点回报：
-                {run.agent_version_observed || '未回报'} · 核对：
-                {run.agent_version ? '一致' : label(run.agent_version_gap)} · Gateway：
-                {run.gateway_version} · 节点构建：{run.node_build || '未回报'}
-              </p>
-              <div>
-                {stamp('开始时间（UTC）', run.created_at)}
-                {stamp('领取时间（UTC）', run.claimed_at)}
-                {stamp('完成时间（UTC）', run.completed_at)}
-                {stamp('过期时间（UTC）', run.expires_at)}
+            <LiquidGlassSurface
+              key={run.run_id}
+              variant="elevated"
+              className="flex flex-col gap-4 rounded-2xl p-5 sm:p-6"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-divider-subtle pb-3">
+                <h2 className="text-base font-semibold text-text-primary">运行详情</h2>
+                <span className="aiops-glass-pill rounded-full px-2.5 py-0.5 font-mono text-[11px] text-text-secondary">
+                  {run.run_id}
+                </span>
               </div>
-              <p>
-                结果指纹：{run.result_sha256 ? run.result_sha256.slice(0, 16) : '无'} · 历史上下文：
-                {run.history_run_count ?? 0} 轮 · 重新生成：{resamples} 次
-              </p>
-              <p>
-                证据工具：
-                {run.evidence_tools?.length ? run.evidence_tools.join('、') : '无'}
-              </p>
-              {!run.trace.length ? (
-                <p>阶段耗时未采集</p>
-              ) : (
-                <ol>
-                  {(() => {
-                    let callNo = 0
-                    // 摘要按工具名覆盖保存（ADR-0251）：内容属于该工具最近一次调用，
-                    // 只挂到最后一个完成事件下，否则历史事件会背上后来才取得的结果。
-                    const lastToolEvent = new Map<string, number>()
-                    run.trace.forEach((event, index) => {
-                      if (event.phase === 'tool' && event.status && event.status !== 'running')
-                        lastToolEvent.set(event.tool || '', index)
-                    })
-                    return run.trace.map((event, index) => {
-                      if (event.phase === 'tool' && event.status && event.status !== 'running')
-                        callNo += 1
-                      const summary =
-                        event.phase === 'tool' &&
-                        lastToolEvent.get(event.tool || '') === index
-                          ? run.tool_summaries?.[event.tool || '']
-                          : null
-                      return (
-                        <li
-                          key={`${event.at}:${event.phase}:${event.tool}:${event.status}:${event.elapsed_ms}`}
-                        >
-                          {describe(event, callNo)}
-                          {summary && (
-                            <p className="ml-4 text-xs text-text-tertiary">
-                              {Object.entries(summary)
-                                .map(([key, value]) => `${key}=${value}`)
-                                .join(' · ')}
-                            </p>
-                          )}
-                        </li>
-                      )
-                    })
-                  })()}
-                </ol>
-              )}
-            </div>
+
+              <div className="aiops-glass-card space-y-1.5 rounded-xl p-4 text-sm">
+                <p className="font-medium text-text-primary">问题：{run.question || '未关联'}</p>
+                <p className="system-xs-regular text-text-secondary">
+                  QA 引用：{run.qa_id || '未关联'} · 订单号：{run.order_no || '未绑定'} ·{' '}
+                  {stateLabel(run)} · {elapsed(run.elapsed_ms)}
+                </p>
+                {run.reason && (
+                  <p className="system-xs-medium text-text-warning">
+                    终态原因：{label(run.reason)}（{run.reason}）
+                  </p>
+                )}
+                {run.review_reason && run.review_reason !== 'allowed' && (
+                  <p className="system-xs-medium text-text-secondary">
+                    {/* ADR-0252：verdict 只观察不拦截——答复已交付时是复核记录，不是未完成原因 */}
+                    {run.delivery_mode === 'diagnosis'
+                      ? '复核观察（答复已交付）'
+                      : '诊断未完成原因'}
+                    ：{label(run.review_reason)}
+                  </p>
+                )}
+                {run.result_expired && (
+                  <p className="system-xs-regular text-text-tertiary">
+                    业务结果已过期，此处仅保留运行记录。
+                  </p>
+                )}
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="aiops-glass-card space-y-1.5 rounded-xl p-4 system-xs-regular text-text-secondary">
+                  <p>
+                    执行节点：{run.expected_node_id || '未记录'} → 实际{' '}
+                    {run.actual_node_id || '未回报'}
+                    {run.expected_node_id &&
+                      run.actual_node_id &&
+                      run.expected_node_id !== run.actual_node_id &&
+                      '（不一致）'}
+                    {` · 环境：${run.environment || '未记录'} · 语言：${run.language || '未记录'}`}
+                    {run.trial && ' · 试用'}
+                  </p>
+                  <p>
+                    版本：{run.agent_version || '未核对'} · 节点回报：
+                    {run.agent_version_observed || '未回报'} · 核对：
+                    {run.agent_version ? '一致' : label(run.agent_version_gap)} · Gateway：
+                    {run.gateway_version} · 节点构建：{run.node_build || '未回报'}
+                  </p>
+                  <p>
+                    结果指纹：{run.result_sha256 ? run.result_sha256.slice(0, 16) : '无'} ·
+                    历史上下文：
+                    {run.history_run_count ?? 0} 轮 · 重新生成：{resamples} 次
+                  </p>
+                  <p>
+                    证据工具：
+                    {run.evidence_tools?.length ? run.evidence_tools.join('、') : '无'}
+                  </p>
+                </div>
+
+                <div className="aiops-glass-card space-y-1 rounded-xl p-4 system-xs-regular text-text-secondary">
+                  {stamp('开始时间（UTC）', run.created_at)}
+                  {stamp('领取时间（UTC）', run.claimed_at)}
+                  {stamp('完成时间（UTC）', run.completed_at)}
+                  {stamp('过期时间（UTC）', run.expires_at)}
+                </div>
+              </div>
+
+              <div className="aiops-glass-card rounded-xl p-4">
+                {!run.trace.length ? (
+                  <p className="system-xs-regular text-text-tertiary">阶段耗时未采集</p>
+                ) : (
+                  <ol className="space-y-2.5 border-l-2 border-divider-accent/40 pl-4">
+                    {(() => {
+                      let callNo = 0
+                      // 摘要按工具名覆盖保存（ADR-0251）：内容属于该工具最近一次调用，
+                      // 只挂到最后一个完成事件下，否则历史事件会背上后来才取得的结果。
+                      const lastToolEvent = new Map<string, number>()
+                      run.trace.forEach((event, index) => {
+                        if (event.phase === 'tool' && event.status && event.status !== 'running')
+                          lastToolEvent.set(event.tool || '', index)
+                      })
+                      return run.trace.map((event, index) => {
+                        if (event.phase === 'tool' && event.status && event.status !== 'running')
+                          callNo += 1
+                        const summary =
+                          event.phase === 'tool' && lastToolEvent.get(event.tool || '') === index
+                            ? run.tool_summaries?.[event.tool || '']
+                            : null
+                        return (
+                          <li
+                            key={`${event.at}:${event.phase}:${event.tool}:${event.status}:${event.elapsed_ms}`}
+                            className="relative system-xs-medium text-text-primary"
+                          >
+                            <span
+                              aria-hidden="true"
+                              className="absolute top-1.5 -left-[21px] size-2 rounded-full bg-state-accent-solid ring-2 ring-components-panel-bg"
+                            />
+                            {describe(event, callNo)}
+                            {summary && (
+                              <p className="mt-1 ml-2 rounded-md bg-background-section-burn/65 px-2.5 py-1 font-mono text-[11px] text-text-tertiary">
+                                {Object.entries(summary)
+                                  .map(([key, value]) => `${key}=${value}`)
+                                  .join(' · ')}
+                              </p>
+                            )}
+                          </li>
+                        )
+                      })
+                    })()}
+                  </ol>
+                )}
+              </div>
+            </LiquidGlassSurface>
           )
         })}
     </section>

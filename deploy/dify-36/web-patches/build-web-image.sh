@@ -75,6 +75,10 @@ check_sha 'web/app/(commonLayout)/app/(appDetailLayout)/[appId]/logs/page.tsx' 5
 check_sha web/vite.config.ts 2f38f98a582b64bd1bf6d73384d1e66ea3fe9b9790f1bb4f287e0c164d18c54e
 
 check_sha web/app/components/plugins/plugin-detail-panel/tool-selector/components/reasoning-config-form.tsx ca4d4bd7e041bd088521f65340f27817f9e1ae08f95bf808f7f5b0c2de02be94
+check_sha web/app/styles/globals.css 25d6af27879f4f516d95e048356b80cfd1019a8a05c1aef1f475a2fcd75cbf7a
+check_sha web/app/layout.tsx 71f142fdaa8c50d413b81dbd859e665673759ef093212e14b74d278190f11828
+check_sha web/app/components/main-nav/layout.tsx f6170957f13535802a2df7a17d74e7103cc855d8c5624fc3035282bbc5b64009
+check_sha web/app/signin/layout.tsx b667e21cd9c06438a235a60d49fe01f1b80603919ab89f49f6b600cd6b25b031
 
 echo "== 2. 打补丁（--fuzz=0：上下文对不上就失败）"
 # **先把工作树恢复干净。** 上一次构建留下的补丁产物会让 `patch` 停下来问
@@ -108,14 +112,16 @@ cp "$VERSION_DIR/ExternalKnowledgeIdPicker.tsx" \
 # **打完补丁要验它真的进去了。** 上面所有防护都是"让失败变明显"，但没有一条
 # 证明改动真的落到了源里 —— 而这个脚本一旦产出镜像就会上生产。
 # 判据是每个补丁里 `+++ b/` 指到的文件，都得带着一个只有我们才有的标记。
-for marker in "knowledge-sync" "ExternalKnowledgeIdPicker" "useKnowledgeSync" "environment-directory"; do
+for marker in "knowledge-sync" "ExternalKnowledgeIdPicker" "useKnowledgeSync" "environment-directory" "aiops-liquid-glass"; do
   if ! grep -rq "$marker" "$WORK/web/app" "$WORK/web/service" 2>/dev/null; then
     echo "FAIL: 补丁没打上（找不到 $marker）—— 拒绝构建" >&2
     exit 1
   fi
 done
-echo "ok: 补丁已落进源（两个标记都在）"
+echo "ok: 补丁已落进源（全部标记都在）"
 
+cp "$VERSION_DIR/aiops-liquid-glass.tsx" "$WORK/web/app/components/aiops-liquid-glass.tsx"
+cp "$VERSION_DIR/aiops-liquid-glass.css" "$WORK/web/app/styles/aiops-liquid-glass.css"
 cp "$VERSION_DIR/aiops-environments.tsx" "$WORK/web/app/components/aiops-environments.tsx"
 cp "$VERSION_DIR/aiops-environment-releases.tsx" "$WORK/web/app/components/aiops-environment-releases.tsx"
 cp "$VERSION_DIR/aiops-onboarding-wizard.tsx" "$WORK/web/app/components/aiops-onboarding-wizard.tsx"

@@ -27,6 +27,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useRouter } from '@/next/navigation'
 import { manage } from '@/service/aiops-management'
 import EnvironmentReleasesPanel from './aiops-environment-releases'
+import { LiquidGlassSurface } from './aiops-liquid-glass'
 import OnboardingWizard from './aiops-onboarding-wizard'
 
 type Tenant = { id: string; name: string; enabled: boolean }
@@ -1211,12 +1212,18 @@ export default function EnvironmentManagement() {
 
       <div className="mx-auto max-w-[1360px] space-y-5 px-4 py-5 sm:px-6">
         {/* 顶部工作台横幅与全局概览指标 */}
-        <header className="rounded-2xl border border-components-panel-border bg-components-panel-bg px-5 py-4 shadow-xs sm:px-6">
+        <LiquidGlassSurface
+          as="header"
+          variant="hero"
+          refract
+          interactive
+          className="rounded-2xl px-5 py-4 sm:px-6"
+        >
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-3.5">
               <div
                 aria-hidden="true"
-                className="flex size-11 shrink-0 items-center justify-center rounded-xl border border-divider-accent/40 bg-components-icon-bg-blue-soft text-text-accent shadow-xs"
+                className="aiops-glass-pill flex size-11 shrink-0 items-center justify-center rounded-2xl text-text-accent"
               >
                 <span className="i-ri-server-line size-5" />
               </div>
@@ -1224,7 +1231,7 @@ export default function EnvironmentManagement() {
                 <div className="flex flex-wrap items-center gap-2.5">
                   <h1 className="system-xl-semibold text-text-primary">环境与租户</h1>
                   {overview && (
-                    <span className="inline-flex items-center gap-1.5 rounded-full border border-divider-subtle bg-background-section-burn px-2.5 py-0.5 system-xs-medium text-text-secondary">
+                    <span className="aiops-glass-pill inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 system-xs-medium text-text-secondary">
                       <span
                         aria-hidden="true"
                         className="i-ri-git-branch-line size-3 text-text-accent"
@@ -1242,6 +1249,7 @@ export default function EnvironmentManagement() {
             <div className="flex flex-wrap items-center gap-2">
               <Button
                 variant="secondary"
+                className="aiops-glass-pill-btn"
                 disabled={busy}
                 onClick={() => {
                   navigate(() => {
@@ -1258,6 +1266,7 @@ export default function EnvironmentManagement() {
               {data?.can_create && (
                 <Button
                   variant="primary"
+                  className="rounded-full!"
                   disabled={busy}
                   onClick={() => {
                     navigate(() => {
@@ -1275,7 +1284,7 @@ export default function EnvironmentManagement() {
 
           {overview && (
             <div className="mt-4 grid gap-3 border-t border-divider-subtle pt-3.5 sm:grid-cols-3">
-              <div className="flex items-center justify-between rounded-xl bg-background-section-burn/70 px-3.5 py-2.5">
+              <div className="aiops-glass-card flex items-center justify-between rounded-xl px-3.5 py-2.5">
                 <div className="flex items-center gap-2.5">
                   <span
                     aria-hidden="true"
@@ -1295,7 +1304,7 @@ export default function EnvironmentManagement() {
                 </span>
               </div>
 
-              <div className="flex items-center justify-between gap-3 rounded-xl bg-background-section-burn/70 px-3.5 py-2.5">
+              <div className="aiops-glass-card flex items-center justify-between gap-3 rounded-xl px-3.5 py-2.5">
                 <div className="flex items-center gap-2.5">
                   <span
                     aria-hidden="true"
@@ -1322,7 +1331,7 @@ export default function EnvironmentManagement() {
                 </div>
               </div>
 
-              <div className="flex items-center justify-between rounded-xl bg-background-section-burn/70 px-3.5 py-2.5">
+              <div className="aiops-glass-card flex items-center justify-between rounded-xl px-3.5 py-2.5">
                 <div className="flex items-center gap-2.5">
                   <span
                     aria-hidden="true"
@@ -1342,7 +1351,7 @@ export default function EnvironmentManagement() {
               </div>
             </div>
           )}
-        </header>
+        </LiquidGlassSurface>
 
         {/* 全局反馈条 */}
         {error && (
@@ -1378,7 +1387,7 @@ export default function EnvironmentManagement() {
           </div>
         )}
         {!data && !error && (
-          <div className="space-y-4 rounded-2xl border border-components-panel-border bg-components-panel-bg p-6 shadow-xs">
+          <div className="aiops-glass-elevated space-y-4 rounded-2xl p-6">
             <div className="flex items-center gap-3">
               <span
                 aria-hidden="true"
@@ -1426,7 +1435,11 @@ export default function EnvironmentManagement() {
         {data && draft && (
           <div className="grid items-start gap-6 lg:grid-cols-[16.5rem_minmax(0,1fr)]">
             {/* 左侧业务环境列表 */}
-            <aside className="rounded-2xl border border-components-panel-border bg-components-panel-bg p-3 shadow-xs lg:sticky lg:top-4">
+            <LiquidGlassSurface
+              as="aside"
+              variant="rail"
+              className="rounded-2xl p-3 lg:sticky lg:top-4"
+            >
               <div className="mb-2.5 flex items-center justify-between px-1.5">
                 <span className="system-xs-semibold text-text-secondary">
                   业务环境（{rows.length}）
@@ -1478,8 +1491,8 @@ export default function EnvironmentManagement() {
                       key={row.id}
                       className={`relative overflow-hidden rounded-xl border transition-all ${
                         active
-                          ? 'border-state-accent-solid/55 bg-state-accent-hover/75 shadow-2xs'
-                          : 'border-transparent hover:border-divider-subtle hover:bg-background-section-burn/70'
+                          ? 'aiops-glass-pill border-state-accent-solid/60 bg-state-accent-hover/70 shadow-sm'
+                          : 'border-transparent hover:border-divider-subtle hover:bg-background-section-burn/55'
                       }`}
                     >
                       {active && (
@@ -1548,13 +1561,13 @@ export default function EnvironmentManagement() {
                   </p>
                 )}
               </nav>
-            </aside>
+            </LiquidGlassSurface>
 
             {/* 右侧主工作台 */}
             <div className="min-w-0 space-y-5">
               {/* 工作区顶栏 + 4 个主 Tab */}
-              <div className="overflow-hidden rounded-2xl border border-components-panel-border bg-components-panel-bg shadow-xs">
-                <div className="bg-linear-to-b from-components-panel-gradient-1/35 to-components-panel-bg px-5 pt-5 pb-4 sm:px-6">
+              <LiquidGlassSurface variant="elevated" className="overflow-hidden rounded-2xl">
+                <div className="bg-linear-to-b from-components-panel-gradient-1/25 to-transparent px-5 pt-5 pb-4 sm:px-6">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="space-y-2">
                       <div className="flex flex-wrap items-center gap-2">
@@ -1736,14 +1749,14 @@ export default function EnvironmentManagement() {
                         {isCurrent && (
                           <span
                             aria-hidden="true"
-                            className="absolute inset-x-0 bottom-0 h-[2.5px] rounded-t-full bg-state-accent-solid"
+                            className="absolute inset-x-0 bottom-0 h-[2.5px] rounded-t-full bg-state-accent-solid shadow-[0_0_12px_var(--aiops-glass-edge-glow)]"
                           />
                         )}
                       </button>
                     )
                   })}
                 </div>
-              </div>
+              </LiquidGlassSurface>
 
               {showWizard && (
                 <OnboardingWizard
@@ -1780,10 +1793,10 @@ export default function EnvironmentManagement() {
                   {!plan || dirty ? (
                     <section
                       aria-label="下一步操作"
-                      className={`rounded-2xl border p-6 shadow-xs ${
+                      className={`aiops-glass-elevated rounded-2xl p-6 ${
                         (readyToPublishOnboard || readyToPublishValidate) && draftReady
-                          ? 'border-state-success-active/60 bg-linear-to-br from-components-badge-bg-green-soft/65 via-components-panel-bg to-components-panel-bg'
-                          : 'border-components-panel-border bg-components-panel-bg'
+                          ? 'border-state-success-active/60 bg-linear-to-br from-components-badge-bg-green-soft/55 via-transparent to-transparent'
+                          : ''
                       }`}
                     >
                       <div className="mb-5 border-b border-divider-subtle pb-4">
@@ -1953,7 +1966,7 @@ export default function EnvironmentManagement() {
                     /* 预检完成：直接呈现干净的「开通计划与一键开通」操作卡 */
                     <section
                       aria-label="开通计划"
-                      className="overflow-hidden rounded-2xl border border-divider-accent bg-components-panel-bg shadow-xs"
+                      className="aiops-glass-elevated overflow-hidden rounded-2xl border-divider-accent/70"
                     >
                       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-divider-subtle bg-components-badge-bg-blue-light-soft/45 px-6 py-4">
                         <div className="flex flex-wrap items-center gap-2.5">
@@ -2380,7 +2393,7 @@ export default function EnvironmentManagement() {
                   {selected && (
                     <section
                       aria-label="租户与能力总览"
-                      className="overflow-hidden rounded-2xl border border-components-panel-border bg-components-panel-bg shadow-xs"
+                      className="aiops-glass-elevated overflow-hidden rounded-2xl"
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-divider-subtle px-6 py-4">
                         <div className="flex items-center gap-2.5">
@@ -2606,7 +2619,7 @@ export default function EnvironmentManagement() {
                   {selected && (
                     <section
                       aria-label="近期开通与发布"
-                      className="overflow-hidden rounded-2xl border border-components-panel-border bg-components-panel-bg shadow-xs"
+                      className="aiops-glass-elevated overflow-hidden rounded-2xl"
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-divider-subtle px-6 py-4">
                         <div className="flex items-center gap-2.5">
@@ -2858,7 +2871,7 @@ export default function EnvironmentManagement() {
                 >
                   <fieldset
                     disabled={busy || (!selected && !data.can_create)}
-                    className="divide-y divide-divider-subtle overflow-hidden rounded-2xl border border-components-panel-border bg-components-panel-bg shadow-xs"
+                    className="aiops-glass-elevated divide-y divide-divider-subtle overflow-hidden rounded-2xl"
                   >
                     <legend className="sr-only">连接配置</legend>
 
@@ -3177,7 +3190,7 @@ export default function EnvironmentManagement() {
                   {selected && (
                     <section
                       aria-label="运行节点与工具"
-                      className="rounded-2xl border border-components-panel-border bg-components-panel-bg p-6 shadow-xs"
+                      className="aiops-glass-elevated rounded-2xl p-6"
                     >
                       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
                         <div className="flex items-center gap-2.5">
@@ -3299,7 +3312,7 @@ export default function EnvironmentManagement() {
                   {overview && overview.environments.length > 0 && (
                     <section
                       aria-label="环境总览"
-                      className="overflow-hidden rounded-2xl border border-components-panel-border bg-components-panel-bg shadow-xs"
+                      className="aiops-glass-elevated overflow-hidden rounded-2xl"
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-divider-subtle px-6 py-4">
                         <div className="flex items-center gap-2.5">
@@ -3394,7 +3407,7 @@ export default function EnvironmentManagement() {
                   {selected && (
                     <section
                       aria-label="现场预检任务"
-                      className="space-y-4 rounded-2xl border border-components-panel-border bg-components-panel-bg p-6 shadow-xs"
+                      className="aiops-glass-elevated space-y-4 rounded-2xl p-6"
                     >
                       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-divider-subtle pb-4">
                         <div className="flex items-center gap-2.5">
