@@ -4,6 +4,7 @@ import { Button } from '@langgenius/dify-ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@langgenius/dify-ui/popover'
 import { useEffect, useState } from 'react'
 import { manage } from '@/service/aiops-management'
+import { LiquidGlassSurface } from './aiops-liquid-glass'
 
 type IngressDiff = {
   changed: boolean
@@ -331,12 +332,17 @@ export default function EnvironmentReleasesPanel({
       )}
 
       {/* 当前运行版本英雄卡 */}
-      <section className="overflow-hidden rounded-2xl border border-components-panel-border bg-components-panel-bg shadow-xs">
-        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-divider-subtle bg-background-section-burn/40 px-6 py-4">
+      <LiquidGlassSurface
+        as="section"
+        variant="hero"
+        interactive
+        className="overflow-hidden rounded-2xl"
+      >
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-divider-subtle bg-background-section-burn/35 px-6 py-4">
           <div className="flex items-start gap-3">
             <span
               aria-hidden="true"
-              className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-components-icon-bg-blue-soft text-text-accent"
+              className="aiops-glass-pill flex size-9 shrink-0 items-center justify-center rounded-xl text-text-accent"
             >
               <span className="i-ri-git-branch-line size-4" />
             </span>
@@ -381,13 +387,13 @@ export default function EnvironmentReleasesPanel({
         </div>
 
         <div className="grid gap-3 p-5 sm:grid-cols-3">
-          <div className="rounded-xl border border-divider-subtle bg-background-section-burn/55 px-4 py-3">
+          <div className="aiops-glass-card rounded-xl px-4 py-3">
             <div className="text-[11px] text-text-tertiary">线上当前版本</div>
             <div className="mt-1 font-mono system-sm-semibold break-all text-text-primary">
               {overview?.current_version || (loading ? '加载中…' : '尚未探测（请点击刷新）')}
             </div>
           </div>
-          <div className="rounded-xl border border-divider-subtle bg-background-section-burn/55 px-4 py-3">
+          <div className="aiops-glass-card rounded-xl px-4 py-3">
             <div className="text-[11px] text-text-tertiary">运行时与健康状态</div>
             <div className="mt-1 flex items-center gap-2 system-sm-medium text-text-primary">
               <span
@@ -410,7 +416,7 @@ export default function EnvironmentReleasesPanel({
               </span>
             </div>
           </div>
-          <div className="rounded-xl border border-divider-subtle bg-background-section-burn/55 px-4 py-3">
+          <div className="aiops-glass-card rounded-xl px-4 py-3">
             <div className="flex items-center justify-between gap-2">
               <div className="text-[11px] text-text-tertiary">公网 HTTPS 入口</div>
               {overview?.gateway_url && (
@@ -418,7 +424,7 @@ export default function EnvironmentReleasesPanel({
                   type="button"
                   aria-label={`复制 ${overview.gateway_url}`}
                   onClick={() => copyGatewayUrl(overview.gateway_url)}
-                  className={`inline-flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+                  className={`inline-flex cursor-pointer items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors ${
                     gatewayCopied
                       ? 'bg-components-badge-bg-green-soft text-text-success'
                       : 'text-text-tertiary hover:bg-components-panel-bg hover:text-text-primary'
@@ -437,7 +443,7 @@ export default function EnvironmentReleasesPanel({
             </div>
           </div>
         </div>
-      </section>
+      </LiquidGlassSurface>
 
       {/* 控制面 41 或未引导主机说明 */}
       {envIsControl ? (
@@ -482,7 +488,12 @@ export default function EnvironmentReleasesPanel({
       ) : (
         <div className="grid gap-5 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
           {/* 无损滚动升级面板 */}
-          <section className="flex flex-col justify-between gap-4 rounded-2xl border border-components-panel-border bg-components-panel-bg p-5 shadow-xs">
+          <LiquidGlassSurface
+            as="section"
+            variant="elevated"
+            interactive
+            className="flex flex-col justify-between gap-4 rounded-2xl p-5"
+          >
             <div className="space-y-3.5">
               <div className="flex items-start gap-3">
                 <span
@@ -561,7 +572,7 @@ export default function EnvironmentReleasesPanel({
                     <PopoverContent
                       placement="bottom-start"
                       sideOffset={6}
-                      className="w-(--anchor-width) max-w-[calc(100vw-2rem)] overflow-hidden p-0! shadow-xl"
+                      className="aiops-glass-refract-surface w-(--anchor-width) max-w-[calc(100vw-2rem)] overflow-hidden p-0! shadow-xl"
                     >
                       <div className="border-b border-divider-subtle bg-background-section-burn/65 p-2.5">
                         {releases.length > 5 ? (
@@ -808,10 +819,15 @@ export default function EnvironmentReleasesPanel({
                 </div>
               </div>
             )}
-          </section>
+          </LiquidGlassSurface>
 
           {/* 一键安全回滚面板 */}
-          <section className="flex flex-col justify-between gap-4 rounded-2xl border border-components-panel-border bg-components-panel-bg p-5 shadow-xs">
+          <LiquidGlassSurface
+            as="section"
+            variant="elevated"
+            interactive
+            className="flex flex-col justify-between gap-4 rounded-2xl p-5"
+          >
             <div className="space-y-4">
               <div className="flex items-start gap-3">
                 <span
@@ -890,7 +906,7 @@ export default function EnvironmentReleasesPanel({
                   </div>
                 </div>
               ))}
-          </section>
+          </LiquidGlassSurface>
         </div>
       )}
 

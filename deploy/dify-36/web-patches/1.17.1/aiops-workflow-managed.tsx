@@ -131,39 +131,56 @@ export function WorkflowManagedStrip({
       className="flex items-center"
     >
       <Drawer swipeDirection="right">
-        <DrawerTrigger render={<Button variant="secondary" size="small" />}>受管发布</DrawerTrigger>
+        <DrawerTrigger
+          render={<Button variant="secondary" size="small" className="aiops-glass-pill-btn" />}
+        >
+          受管发布
+        </DrawerTrigger>
         <DrawerPortal>
-          <DrawerBackdrop className="fixed" />
+          <DrawerBackdrop className="fixed backdrop-blur-[2px]" />
           <DrawerViewport>
-            <DrawerPopup>
-              <div className="flex items-center justify-between border-b-[0.5px] border-divider-regular px-6 py-4">
-                <DrawerTitle className="system-lg-semibold text-text-primary">受管发布</DrawerTitle>
+            <DrawerPopup className="aiops-glass-drawer">
+              <div className="flex items-center justify-between border-b border-divider-subtle bg-background-section-burn/40 px-6 py-4">
+                <div className="flex items-center gap-2.5">
+                  <span
+                    aria-hidden="true"
+                    className="aiops-glass-pill flex size-8 items-center justify-center rounded-xl text-text-accent"
+                  >
+                    <span className="i-ri-rocket-2-line size-4" />
+                  </span>
+                  <DrawerTitle className="system-lg-semibold text-text-primary">
+                    受管发布
+                  </DrawerTitle>
+                </div>
                 <DrawerCloseButton aria-label="关闭受管发布" />
               </div>
               <DrawerContent>
-                <div className="flex flex-col gap-6">
-                  <KnowledgeAccess
-                    appId={status.app_id}
-                    disabled={disabled || busy || !!trial}
-                    nodes={nodes}
-                    updateNode={updateNode}
-                    sync={sync}
-                    onBlocked={setSelectionBlocked}
-                  />
-                  <ManagedPublish
-                    status={status}
-                    save={async () => {
-                      setBusy(true)
-                      try {
-                        return await save()
-                      } finally {
-                        setBusy(false)
-                      }
-                    }}
-                    disabled={disabled || !!trial || selectionBlocked}
-                  />
-                  <div className="border-t-[0.5px] border-divider-regular" />
-                  <div className="flex flex-col gap-3">
+                <div className="flex flex-col gap-4">
+                  <div className="aiops-glass-card rounded-2xl p-4">
+                    <KnowledgeAccess
+                      appId={status.app_id}
+                      disabled={disabled || busy || !!trial}
+                      nodes={nodes}
+                      updateNode={updateNode}
+                      sync={sync}
+                      onBlocked={setSelectionBlocked}
+                    />
+                  </div>
+                  <div className="aiops-glass-card rounded-2xl p-4">
+                    <ManagedPublish
+                      status={status}
+                      save={async () => {
+                        setBusy(true)
+                        try {
+                          return await save()
+                        } finally {
+                          setBusy(false)
+                        }
+                      }}
+                      disabled={disabled || !!trial || selectionBlocked}
+                    />
+                  </div>
+                  <div className="aiops-glass-card flex flex-col gap-3 rounded-2xl p-4">
                     <span className="system-sm-semibold text-text-primary">预览客户端客服</span>
                     <div className="flex flex-col gap-1">
                       <span className="system-xs-medium text-text-secondary">问题</span>
@@ -191,6 +208,7 @@ export function WorkflowManagedStrip({
                     <Button
                       variant="primary"
                       size="small"
+                      className="rounded-full!"
                       loading={busy}
                       disabled={disabled || (!trial && (!question.trim() || selectionBlocked))}
                       onClick={trial ? cancel : start}
@@ -200,7 +218,7 @@ export function WorkflowManagedStrip({
                     <div
                       role="status"
                       aria-label="预览结果"
-                      className="max-h-80 overflow-y-auto system-sm-regular whitespace-pre-wrap text-text-secondary"
+                      className="max-h-80 overflow-y-auto rounded-xl border border-divider-subtle bg-background-section-burn/55 p-3 system-sm-regular whitespace-pre-wrap text-text-secondary"
                     >
                       {message}
                     </div>
@@ -369,8 +387,10 @@ function KnowledgeAccess({
       {selected
         .filter((id) => !libraries.some((row) => row.id === id))
         .map((id, index) => (
-          <div key={id} className="flex items-center gap-2">
-            <span>已失效的知识库引用 {index + 1}</span>
+          <div key={id} className="flex flex-wrap items-center justify-between gap-2">
+            <span className="system-xs-medium text-text-warning">
+              已失效的知识库引用 {index + 1}
+            </span>
             <Button
               size="small"
               variant="secondary"

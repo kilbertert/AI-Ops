@@ -1,0 +1,64 @@
+diff --git a/web/app/components/main-nav/layout.tsx b/web/app/components/main-nav/layout.tsx
+index 641e45f4..473c8955 100644
+--- a/web/app/components/main-nav/layout.tsx
++++ b/web/app/components/main-nav/layout.tsx
+@@ -49,7 +49,7 @@ const MainNavLayout = ({ children, detailSidebar, initialPlatform }: MainNavLayo
+   })
+ 
+   return (
+-    <div className="flex h-0 min-h-0 min-w-0 grow overflow-hidden bg-background-body">
++    <div className="aiops-ambient-shell relative flex h-0 min-h-0 min-w-0 grow overflow-hidden bg-background-body">
+       <SkipNav>{t(($) => $['navigation.skipToMain'])}</SkipNav>
+       <AppDetailStoreCleanup />
+       {hideMainNavigation ? null : useDetailSidebar ? (
+diff --git a/web/app/layout.tsx b/web/app/layout.tsx
+index 50f9e133..9ba4c23f 100644
+--- a/web/app/layout.tsx
++++ b/web/app/layout.tsx
+@@ -17,6 +17,7 @@ import { getLocaleOnServer } from '@/i18n-config/server'
+ import { headers } from '@/next/headers'
+ import { getApplicationTitle } from '@/utils/document-title'
+ import { basePath } from '@/utils/var'
++import { LiquidGlassDefs } from './components/aiops-liquid-glass'
+ import { CloudAnalytics } from './components/base/analytics-consent/cloud-analytics'
+ import { PartnerStackCookieRecorder } from './components/billing/partner-stack/cookie-recorder'
+ import { AgentationLoader } from './components/devtools/agentation-loader'
+@@ -74,6 +75,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
+       </head>
+       <body className="h-full bg-background-body" {...datasetMap}>
+         <CloudAnalytics />
++        <LiquidGlassDefs />
+         <div className="isolate h-full">
+           <JotaiProvider>
+             <ThemeProvider {...themeProviderProps}>
+diff --git a/web/app/signin/layout.tsx b/web/app/signin/layout.tsx
+index b1eb5541..faaba745 100644
+--- a/web/app/signin/layout.tsx
++++ b/web/app/signin/layout.tsx
+@@ -8,10 +8,14 @@ export default function SignInLayout({ children }: any) {
+   const { data: systemFeatures } = useSuspenseQuery(systemFeaturesQueryOptions())
+   return (
+     <>
+-      <div className={cn('flex min-h-screen w-full justify-center bg-background-default-burn p-6')}>
++      <div
++        className={cn(
++          'aiops-signin-shell flex min-h-screen w-full justify-center bg-background-default-burn p-6',
++        )}
++      >
+         <div
+           className={cn(
+-            'flex w-full min-w-0 flex-col items-center rounded-2xl border border-effects-highlight bg-background-default-subtle',
++            'aiops-signin-card flex w-full min-w-0 flex-col items-center rounded-2xl border border-effects-highlight bg-background-default-subtle',
+           )}
+         >
+           <Header />
+diff --git a/web/app/styles/globals.css b/web/app/styles/globals.css
+index 9cb7d3a4..a7693db5 100644
+--- a/web/app/styles/globals.css
++++ b/web/app/styles/globals.css
+@@ -1,4 +1,5 @@
+ @import './tailwind-core.css';
++@import './aiops-liquid-glass.css';
+ 
+ @source '../../app';
+ @source '../../context';

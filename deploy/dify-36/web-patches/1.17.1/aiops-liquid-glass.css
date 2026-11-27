@@ -1,0 +1,332 @@
+/*
+ * Liquid Glass × Material 3 Expressive Design System for AI-Ops Dify Console.
+ * Dual-theme calibrated tokens + optical refraction + specular rim lighting.
+ */
+
+:root,
+html[data-theme='light'] {
+  --aiops-ease-spatial: cubic-bezier(0.22, 1, 0.36, 1);
+  --aiops-ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* Material 3 Expressive Cool-Pearl Tonal Surface Stack */
+  --aiops-glass-canvas: #eef2fa;
+  --aiops-glass-surface-low: rgba(255, 255, 255, 0.62);
+  --aiops-glass-surface: rgba(255, 255, 255, 0.76);
+  --aiops-glass-surface-high: rgba(255, 255, 255, 0.88);
+  --aiops-glass-surface-highest: rgba(255, 255, 255, 0.94);
+
+  --aiops-glass-border: rgba(15, 23, 42, 0.08);
+  --aiops-glass-border-strong: rgba(37, 99, 235, 0.24);
+  --aiops-glass-rim-top: rgba(255, 255, 255, 0.98);
+  --aiops-glass-rim-bottom: rgba(59, 130, 246, 0.14);
+  --aiops-glass-sheen: rgba(59, 130, 246, 0.1);
+  --aiops-glass-edge-glow: rgba(37, 99, 235, 0.16);
+
+  --aiops-glass-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.04), 0 8px 24px -8px rgba(30, 58, 138, 0.1);
+  --aiops-glass-shadow-elevated:
+    0 2px 6px rgba(15, 23, 42, 0.06), 0 18px 42px -12px rgba(30, 58, 138, 0.16);
+  --aiops-glass-shadow-hover:
+    0 4px 10px rgba(15, 23, 42, 0.06), 0 14px 32px -10px rgba(37, 99, 235, 0.18);
+
+  --aiops-aurora-a: rgba(56, 189, 248, 0.22);
+  --aiops-aurora-b: rgba(59, 130, 246, 0.18);
+  --aiops-aurora-c: rgba(139, 92, 246, 0.13);
+
+  --color-components-panel-bg-blur: rgba(255, 255, 255, 0.84);
+  --color-components-panel-bg-blur-burn: rgba(246, 248, 253, 0.88);
+}
+
+html[data-theme='dark'] {
+  /* Material 3 Expressive Obsidian-Indigo Tonal Surface Stack */
+  --aiops-glass-canvas: #12151f;
+  --aiops-glass-surface-low: rgba(24, 28, 38, 0.56);
+  --aiops-glass-surface: rgba(28, 32, 44, 0.7);
+  --aiops-glass-surface-high: rgba(35, 40, 54, 0.82);
+  --aiops-glass-surface-highest: rgba(42, 48, 64, 0.9);
+
+  --aiops-glass-border: rgba(255, 255, 255, 0.1);
+  --aiops-glass-border-strong: rgba(125, 168, 255, 0.34);
+  --aiops-glass-rim-top: rgba(255, 255, 255, 0.22);
+  --aiops-glass-rim-bottom: rgba(96, 165, 250, 0.14);
+  --aiops-glass-sheen: rgba(96, 165, 250, 0.14);
+  --aiops-glass-edge-glow: rgba(96, 165, 250, 0.22);
+
+  --aiops-glass-shadow:
+    0 2px 6px rgba(0, 0, 0, 0.28), 0 12px 30px -10px rgba(0, 0, 0, 0.45);
+  --aiops-glass-shadow-elevated:
+    0 4px 12px rgba(0, 0, 0, 0.36), 0 22px 48px -14px rgba(0, 0, 0, 0.62);
+  --aiops-glass-shadow-hover:
+    0 6px 16px rgba(0, 0, 0, 0.34), 0 18px 40px -12px rgba(37, 99, 235, 0.26);
+
+  --aiops-aurora-a: rgba(37, 99, 235, 0.18);
+  --aiops-aurora-b: rgba(14, 165, 233, 0.14);
+  --aiops-aurora-c: rgba(99, 102, 241, 0.14);
+
+  --color-components-panel-bg-blur: rgba(31, 35, 48, 0.82);
+  --color-components-panel-bg-blur-burn: rgba(23, 27, 38, 0.86);
+}
+
+/* ---------- Ambient Luminous Backdrops ---------- */
+
+.aiops-ambient-shell {
+  position: relative;
+  background-color: var(--aiops-glass-canvas);
+}
+
+.aiops-ambient-shell::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image:
+    radial-gradient(62% 52% at 10% 8%, var(--aiops-aurora-a) 0%, transparent 72%),
+    radial-gradient(50% 48% at 92% 14%, var(--aiops-aurora-b) 0%, transparent 70%),
+    radial-gradient(56% 52% at 54% 96%, var(--aiops-aurora-c) 0%, transparent 72%);
+}
+
+.aiops-ambient-shell > aside,
+.aiops-ambient-shell > main {
+  position: relative;
+  z-index: 1;
+}
+
+/* Left MainNav floating frosted glass rail */
+.aiops-ambient-shell > aside {
+  background: var(--aiops-glass-surface-low) !important;
+  backdrop-filter: blur(22px) saturate(165%);
+  -webkit-backdrop-filter: blur(22px) saturate(165%);
+  border-right: 1px solid var(--aiops-glass-border);
+  box-shadow: inset -1px 0 0 var(--aiops-glass-rim-top);
+}
+
+/* Sign-in full-bleed ambient canvas & Liquid Glass auth card */
+.aiops-signin-shell {
+  position: relative;
+  overflow: hidden;
+  background-color: var(--aiops-glass-canvas) !important;
+  background-image:
+    radial-gradient(54% 50% at 14% 16%, var(--aiops-aurora-a) 0%, transparent 70%),
+    radial-gradient(52% 48% at 86% 22%, var(--aiops-aurora-b) 0%, transparent 70%),
+    radial-gradient(60% 50% at 50% 94%, var(--aiops-aurora-c) 0%, transparent 74%);
+}
+
+.aiops-signin-card {
+  position: relative;
+  border-radius: 28px !important;
+  background: var(--aiops-glass-surface-high) !important;
+  backdrop-filter: blur(28px) saturate(185%);
+  -webkit-backdrop-filter: blur(28px) saturate(185%);
+  border: 1px solid var(--aiops-glass-border) !important;
+  box-shadow:
+    inset 0 1px 0 var(--aiops-glass-rim-top),
+    inset 0 -1px 0 var(--aiops-glass-rim-bottom),
+    var(--aiops-glass-shadow-elevated);
+}
+
+html[data-liquid-refract='on'] .aiops-signin-card {
+  backdrop-filter: url(#aiops-liquid-surface) blur(26px) saturate(185%);
+}
+
+/* ---------- Core Liquid Glass × Material 3 Surface Primitives ---------- */
+
+.aiops-glass-hero,
+.aiops-glass-card,
+.aiops-glass-elevated,
+.aiops-glass-rail,
+.aiops-glass-toolbar,
+.aiops-glass-pill {
+  position: relative;
+  border: 1px solid var(--aiops-glass-border);
+  transition:
+    transform 240ms var(--aiops-ease-spring),
+    box-shadow 260ms var(--aiops-ease-spatial),
+    border-color 220ms var(--aiops-ease-spatial);
+}
+
+.aiops-glass-hero {
+  background:
+    linear-gradient(135deg, var(--aiops-glass-surface-high) 0%, var(--aiops-glass-surface) 100%);
+  backdrop-filter: blur(24px) saturate(175%);
+  -webkit-backdrop-filter: blur(24px) saturate(175%);
+  box-shadow:
+    inset 0 1px 0 var(--aiops-glass-rim-top),
+    inset 0 -1px 0 var(--aiops-glass-rim-bottom),
+    var(--aiops-glass-shadow-elevated);
+}
+
+.aiops-glass-card {
+  background: var(--aiops-glass-surface);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  box-shadow:
+    inset 0 1px 0 var(--aiops-glass-rim-top),
+    var(--aiops-glass-shadow);
+}
+
+.aiops-glass-elevated {
+  background: var(--aiops-glass-surface-high);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  box-shadow:
+    inset 0 1px 0 var(--aiops-glass-rim-top),
+    inset 0 -1px 0 var(--aiops-glass-rim-bottom),
+    var(--aiops-glass-shadow-elevated);
+}
+
+.aiops-glass-rail {
+  background: var(--aiops-glass-surface-low);
+  backdrop-filter: blur(16px) saturate(155%);
+  -webkit-backdrop-filter: blur(16px) saturate(155%);
+  box-shadow:
+    inset 0 1px 0 var(--aiops-glass-rim-top),
+    var(--aiops-glass-shadow);
+}
+
+.aiops-glass-toolbar {
+  background: var(--aiops-glass-surface-high);
+  backdrop-filter: blur(22px) saturate(175%);
+  -webkit-backdrop-filter: blur(22px) saturate(175%);
+  box-shadow:
+    inset 0 1px 0 var(--aiops-glass-rim-top),
+    var(--aiops-glass-shadow);
+}
+
+.aiops-glass-pill {
+  background: var(--aiops-glass-surface-high);
+  backdrop-filter: blur(16px) saturate(170%);
+  -webkit-backdrop-filter: blur(16px) saturate(170%);
+  box-shadow:
+    inset 0 1px 0 var(--aiops-glass-rim-top),
+    inset 0 -1px 0 var(--aiops-glass-rim-bottom),
+    var(--aiops-glass-shadow);
+}
+
+.aiops-glass-drawer {
+  background: var(--aiops-glass-surface-highest) !important;
+  backdrop-filter: blur(28px) saturate(185%) !important;
+  -webkit-backdrop-filter: blur(28px) saturate(185%) !important;
+  border-left: 1px solid var(--aiops-glass-border) !important;
+  box-shadow:
+    inset 1px 0 0 var(--aiops-glass-rim-top),
+    var(--aiops-glass-shadow-elevated) !important;
+}
+
+.aiops-glass-pill-btn {
+  position: relative;
+  border-radius: 9999px !important;
+  backdrop-filter: blur(14px) saturate(165%);
+  -webkit-backdrop-filter: blur(14px) saturate(165%);
+  box-shadow:
+    inset 0 1px 0 var(--aiops-glass-rim-top),
+    var(--aiops-glass-shadow);
+  transition:
+    transform 220ms var(--aiops-ease-spring),
+    box-shadow 220ms var(--aiops-ease-spatial);
+}
+
+.aiops-glass-pill-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 var(--aiops-glass-rim-top),
+    var(--aiops-glass-shadow-hover);
+}
+
+/* Dual-layer specular rim & cursor-reactive sheen */
+.aiops-glass-interactive::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: var(--lg-glow, 0);
+  transition: opacity 220ms var(--aiops-ease-spatial);
+  background: radial-gradient(
+    280px circle at var(--lg-mx, 50%) var(--lg-my, 0%),
+    var(--aiops-glass-sheen),
+    transparent 65%
+  );
+  z-index: 0;
+}
+
+.aiops-glass-interactive:hover {
+  border-color: var(--aiops-glass-border-strong);
+  box-shadow:
+    inset 0 1px 0 var(--aiops-glass-rim-top),
+    var(--aiops-glass-shadow-hover);
+}
+
+/* Chromium-only SVG optical refraction opt-in */
+html[data-liquid-refract='on'] .aiops-glass-refract {
+  backdrop-filter: url(#aiops-liquid-pill) blur(20px) saturate(180%);
+}
+
+html[data-liquid-refract='on'] .aiops-glass-refract-surface {
+  backdrop-filter: url(#aiops-liquid-surface) blur(24px) saturate(185%);
+}
+
+html[data-theme='light'][data-liquid-refract='on'] .aiops-glass-refract,
+html[data-theme='light'][data-liquid-refract='on'] .aiops-glass-refract-surface {
+  backdrop-filter: url(#aiops-liquid-surface) blur(22px) saturate(175%) brightness(1.03);
+}
+
+/* ---------- Cross-Product Dify Integration ---------- */
+
+/* Enhance existing MainNav active glass pill (keeps exact class name `.dify-blue-glass-surface`) */
+@layer utilities {
+  .dify-blue-glass-surface {
+    transition:
+      transform 220ms var(--aiops-ease-spring),
+      box-shadow 220ms var(--aiops-ease-spatial);
+  }
+}
+
+html[data-liquid-refract='on'] .dify-blue-glass-surface {
+  backdrop-filter: url(#aiops-liquid-pill) blur(10px) saturate(170%);
+}
+
+/* Upgrade Studio / Knowledge / Marketplace / Home cards inside ambient shell (exclude workflow canvas) */
+.aiops-ambient-shell .bg-components-card-bg:not(.react-flow *):not(.aiops-glass-hero):not(.aiops-glass-card):not(.aiops-glass-elevated) {
+  background-color: var(--aiops-glass-surface);
+  backdrop-filter: blur(16px) saturate(155%);
+  -webkit-backdrop-filter: blur(16px) saturate(155%);
+  box-shadow:
+    inset 0 1px 0 var(--aiops-glass-rim-top),
+    var(--aiops-glass-shadow);
+  transition:
+    transform 240ms var(--aiops-ease-spring),
+    box-shadow 240ms var(--aiops-ease-spatial),
+    border-color 200ms ease;
+}
+
+.aiops-ambient-shell .bg-components-card-bg:not(.react-flow *):hover {
+  border-color: var(--aiops-glass-border-strong);
+  box-shadow:
+    inset 0 1px 0 var(--aiops-glass-rim-top),
+    var(--aiops-glass-shadow-hover);
+}
+
+/* Upgrade floating Dify popovers, selects, menus, toasts globally */
+.bg-components-panel-bg-blur {
+  backdrop-filter: blur(24px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(24px) saturate(180%) !important;
+  box-shadow:
+    inset 0 1px 0 var(--aiops-glass-rim-top),
+    var(--aiops-glass-shadow-elevated);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aiops-glass-hero,
+  .aiops-glass-card,
+  .aiops-glass-elevated,
+  .aiops-glass-rail,
+  .aiops-glass-toolbar,
+  .aiops-glass-pill,
+  .aiops-glass-pill-btn,
+  .aiops-glass-interactive::after,
+  .aiops-ambient-shell .bg-components-card-bg:not(.react-flow *) {
+    transition: none !important;
+    transform: none !important;
+  }
+}

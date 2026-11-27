@@ -38,6 +38,7 @@ import {
 import { StatusDot } from '@langgenius/dify-ui/status-dot'
 import { useEffect, useState } from 'react'
 import { entryLabels, failureText, manage, messages, steps } from '@/service/aiops-management'
+import { LiquidGlassSurface } from './aiops-liquid-glass'
 
 type Item = { id: string; name: string }
 type Operation = {
@@ -398,9 +399,19 @@ function TenantServices() {
     )
   if (!catalogue?.platform) return null
   return (
-    <div className="px-6 py-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <Button variant="primary" size="medium" onClick={() => setOpen(!open)}>
+    <div className="px-6 pt-3 pb-2">
+      <LiquidGlassSurface
+        variant="toolbar"
+        refract
+        interactive
+        className="flex flex-wrap items-center gap-2 rounded-2xl px-4 py-2.5"
+      >
+        <Button
+          variant="primary"
+          size="medium"
+          className="rounded-full!"
+          onClick={() => setOpen(!open)}
+        >
           {open ? '收起客户 AI 服务' : '复制并开通客户 AI 服务'}
         </Button>
         <div className="flex w-52">
@@ -418,6 +429,7 @@ function TenantServices() {
         <Button
           variant="secondary"
           size="medium"
+          className="aiops-glass-pill-btn"
           disabled={busy || !selectedWorkspace}
           onClick={() => enter()}
         >
@@ -426,21 +438,24 @@ function TenantServices() {
         <Button
           variant="secondary"
           size="medium"
+          className="aiops-glass-pill-btn"
           disabled={busy || !selectedWorkspace}
           onClick={() => enter(true)}
         >
           进入知识库
         </Button>
-      </div>
+      </LiquidGlassSurface>
       {!open && error && (
         <p role="alert" className="mt-2 system-sm-regular text-text-destructive">
           {error}
         </p>
       )}
       {open && (
-        <section
+        <LiquidGlassSurface
+          as="section"
+          variant="elevated"
           aria-label="开通客户 AI 服务"
-          className="mt-3 rounded-xl border-[0.5px] border-components-card-border bg-components-card-bg p-4 shadow-xs shadow-shadow-shadow-3"
+          className="mt-3 rounded-2xl p-4 sm:p-5"
         >
           <fieldset className="mb-3 flex flex-wrap items-center gap-4">
             <legend className="system-sm-medium text-text-secondary">开通范围</legend>
@@ -571,7 +586,7 @@ function TenantServices() {
                 return (
                   <div
                     key={op.id}
-                    className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border-[0.5px] border-divider-regular bg-components-panel-bg px-4 py-3"
+                    className="aiops-glass-card flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl px-4 py-3"
                   >
                     <span className="system-sm-semibold text-text-primary">
                       {op.tenant_name} · {op.name}
@@ -651,7 +666,7 @@ function TenantServices() {
               )}
             </div>
           )}
-        </section>
+        </LiquidGlassSurface>
       )}
     </div>
   )

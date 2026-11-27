@@ -6,6 +6,7 @@ import { Input } from '@langgenius/dify-ui/input'
 import { StatusDot } from '@langgenius/dify-ui/status-dot'
 import { useEffect, useState } from 'react'
 import { manage } from '@/service/aiops-management'
+import { LiquidGlassSurface } from './aiops-liquid-glass'
 
 type WizardStep = 1 | 2 | 3 | 4 | 5
 type HostEnrollMode = 'ephemeral_password' | 'bootstrap_script'
@@ -930,16 +931,18 @@ export default function OnboardingWizard({
   }
 
   return (
-    <section
+    <LiquidGlassSurface
+      as="section"
+      variant="elevated"
       aria-label="新客户 5 步自助开通向导"
-      className="space-y-5 overflow-hidden rounded-2xl border border-components-panel-border bg-components-panel-bg p-6 shadow-xs"
+      className="space-y-5 overflow-hidden rounded-2xl p-6"
     >
       {/* 顶栏 */}
       <div className="flex flex-wrap items-start justify-between gap-4 border-b border-divider-subtle pb-4">
         <div className="flex min-w-0 flex-1 items-start gap-3">
           <span
             aria-hidden="true"
-            className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-divider-accent/40 bg-components-icon-bg-blue-soft text-text-accent"
+            className="aiops-glass-pill flex size-10 shrink-0 items-center justify-center rounded-xl text-text-accent"
           >
             <span className="i-ri-magic-line size-5" />
           </span>
@@ -996,12 +999,12 @@ export default function OnboardingWizard({
               key={item.id}
               type="button"
               onClick={() => setStep(item.id)}
-              className={`group flex cursor-pointer items-start gap-2 rounded-xl border px-2.5 py-2.5 text-left transition-all ${
+              className={`aiops-glass-interactive group relative flex cursor-pointer items-start gap-2 rounded-xl border px-2.5 py-2.5 text-left transition-all ${
                 active
-                  ? 'border-state-accent-solid bg-components-badge-bg-blue-light-soft shadow-2xs'
+                  ? 'aiops-glass-pill border-state-accent-solid/70 shadow-sm'
                   : done
                     ? 'border-state-success-active/45 bg-components-badge-bg-green-soft/65 hover:bg-components-badge-bg-green-soft'
-                    : 'border-divider-subtle bg-background-section-burn/50 hover:border-divider-regular hover:bg-background-section-burn'
+                    : 'aiops-glass-card hover:border-divider-regular'
               }`}
             >
               <span
@@ -1889,6 +1892,6 @@ export default function OnboardingWizard({
           )}
         </div>
       )}
-    </section>
+    </LiquidGlassSurface>
   )
 }
