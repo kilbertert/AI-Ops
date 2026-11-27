@@ -420,3 +420,40 @@ def test_kb_service_live_upload_and_self_validation_via_fastapi(tmp_path: Path, 
     assert revoked_tokens == ["Bearer ephemeral-op-jwt-777"]
     assert "ephemeral-op-jwt-777" not in r_val.text
     assert "13900001111" not in r_val.text
+
+
+def test_run_live_self_validation_executes_probes_concurrently_and_nginx_timeout_180s() -> None:
+    import threading
+
+    barrier = threading.Barrier(3, timeout=2.0)
+
+    def concurrent_http(method: str, url: str, headers: dict[str, str], body):
+        if method == "POST" and url.endswith("/v1/assistant/questions"):
+            idx = barrier.wait()
+            return 202, json.dumps({"qa_id": f"qa_concurrent_{idx}", "status": "queued"})
+        if method == "GET" and "/v1/assistant/questions/" in url:
+            return 200, json.dumps({"qa_id": url.rsplit("/", 1)[1], "status": "completed"})
+        return 404, "{}"
+
+    out = wizard_runtime.run_live_self_validation(
+        {
+            "company_gateway_url": "https://api.example.cn",
+            "tenant_id": "1990990768688599040",
+            "consumer_session": "ts-c",
+            "operator_token": "tok-o",
+            "cases": {
+                "consumer": {"question": "faq?"},
+                "order": {"question": "order?"},
+                "offline": {"question": "offline?"},
+            },
+        },
+        http_caller=concurrent_http,
+        sleep_fn=lambda _s: None,
+    )
+    assert set(out["capabilities"]) == {"consumer", "order", "offline"}
+    assert all(out["capabilities"][k]["state"] == "passed" for k in ("consumer", "order", "offline"))
+
+    repo_root = Path(__file__).resolve().parents[2]
+    conf = (repo_root / "ops/dify-console-bridge/dify-console-publish.conf").read_text(encoding="utf-8")
+    manage_block = conf.split("location = /__aiops/manage {", 1)[1].split("}", 1)[0]
+    assert "proxy_read_timeout 180s;" in manage_block
