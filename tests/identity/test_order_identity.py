@@ -210,6 +210,7 @@ _ALLOWED_ALPHABET_LITERALS = {
     "gateway/routers/files.py": 1,  # 附件上传表单中的 conversation_id 格式白名单，非订单号
     "gateway/schemas.py": 12,  # 拒绝码 / conv_ / code / agent_id / app_id / knowledge / tenant /
     #                          kb_ids / agt_ 版本 ×2 / code —— 订单字段已收口
+    "gateway/user_ingress_manifest.py": 1,  # signed_id 签名媒体 URI 形状正则（order_no 已复用 ORDER_ID_ATOM）
     "onboarding/registry.py": 3,  # 租户、管理员主体编号及审计操作人，非订单
     "onboarding/business.py": 4,  # case_ref/设备id/run证据id/节点id；订单字段调用is_order_identifier
     "onboarding/drafts.py": 1,  # 部署目标/凭据逻辑引用，不是订单号
