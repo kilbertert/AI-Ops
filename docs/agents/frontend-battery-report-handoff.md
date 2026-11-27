@@ -408,7 +408,7 @@ async function loadBatteryReport(orderNo) {
 
 - `report.curves` 含 `temperature`、`voltage`、`power` 三个分组。
 - `series[].points` 每项为 `[unix_timestamp_seconds, numeric_value]`，最多 300 点（已保首尾与极值），X 轴按用户本地时区格式化为 `HH:mm`。
-- `series[].name` 已随作业语言本地化，可直接用作图例；`power` 单位已统一为 `kW`。
+- `series[].name` 已随作业语言本地化，可直接用作图例；`power` 单位已统一为 `kW`。注意 `field === "temperature"` 的回退序列在无 `batteryMaxTemperature`（如交流慢充桩）时图例为「充电枪温度」（`Charger gun temperature`），并非动力电池包温度。
 - 某分组 `series.length === 0` 时展示「本次充电暂无曲线数据」空态，不渲染示例折线。
 - 规格中可选的「单体平均电压偏差」曲线依赖车型电芯串联数 `N`，41 现网车辆规格表暂无 `N` 数据，本版暂不下发该序列（后端已预留字段，前端按 `series` 列表动态渲染即可）。
 
@@ -429,8 +429,8 @@ async function loadBatteryReport(orderNo) {
 
 ## 6. 现网数据边界（出现 `unavailable` 不等于接口故障）
 
-1. **YKC 协议近 14 天订单**：41 上 `charging-pile_comm` 保留约 14 天，可真实驱动全部 7 项指标、SOH 总分、五维雷达与三类曲线；若某单未上报 `0x25`，`battery_temp_delta` 降级由 `0x19` 兜底或标 `unavailable`。
-2. **OCPP / 非 YKC 订单或超过 14 天的历史订单**：无 YKC BMS 帧，正常产出 `stop_reason`、`battery_max_temp`、`temp_rise_rate`、`soc_change_rate` 与基础曲线，其余缺数据项返回 `status = "unavailable"` + `reason_code`。
+1. **YKC 协议近 14 天直流订单**：41 上 `charging-pile_comm` 保留约 14 天，可真实驱动全部 7 项指标、SOH 总分、五维雷达与三类曲线；若某单未上报 `0x25`，`battery_temp_delta` 降级由 `0x19` 兜底或标 `unavailable`。
+2. **交流慢充桩、OCPP / 非 YKC 订单或超过 14 天的历史订单**：无直流 BMS CAN 帧，正常产出 `stop_reason` 与功率（kW）/电流/电压/充电枪温度曲线，其余缺数据项及 SOH 规范返回 `status = "unavailable"` + `reason_code`。
 3. **浅充订单（`ΔSOC < 30%`）**：`overall_health_score` 与 `radar[capacity].score` 为 `null`，前端需展示「浅充暂不评估」。
 
 ---

@@ -361,7 +361,7 @@ Authorization: Bearer <access_token>
 | `cell_max_voltage` | 单体蓄电池最高压 | `V` | `<= 3.65`（LFP）/ `<= 4.20`（NCM） | 数值；可选附 `probe_no`（1~256 探针编号） | `CELL_VOLTAGE_DATA_MISSING` / `BATTERY_TYPE_UNKNOWN` |
 
 - `radar`：五维评分（`temperature_balance`、`max_temperature`、`capacity`、`voltage_balance`、`soc_balance`，均 `0..100`）；缺少必要输入或浅充时该维度 `score = null`、`status = "unavailable"` 且给出 `reason_code`。
-- `curves`：功率（`power` kW、`outputCurrent` A）、电压（`outputVoltage`、`bmsMeasuredVoltage`、`maxCellVoltage` V）、温度（`temperature`、`batteryMaxTemperature`、`batteryMinTemperature`、`batteryTempDelta` degC）三组曲线；每条 series 最多 300 个点，保留首点、末点和极值；`name` 按作业语言本地化。
+- `curves`：功率（`power` kW、`outputCurrent` A）、电压（`outputVoltage`、`bmsMeasuredVoltage`、`maxCellVoltage` V）、温度（`temperature` 为充电枪温度 `Charger gun temperature`，`batteryMaxTemperature` / `batteryMinTemperature` / `batteryTempDelta` 为动力电池温度及温差，单位均为 degC）三组曲线；每条 series 最多 300 个点，保留首点、末点和极值；`name` 按作业语言本地化。交流慢充桩无 BMS 报文时正常输出功率/电流/电压与充电枪温度曲线及 `stop_reason`，其余 BMS 相关指标及 SOH 降级为 `unavailable`。
 - `health_metrics`：经单位确认的中间计算值（含 `soh`、`soh_shallow_estimate`、`soh_status`、`is_shallow_charge`、`nominal_capacity_kwh`、`nominal_capacity_source`、`voltage_balance_basis`、`max_cell_voltage_probe_no` 等）。
 - `completeness`：7 项体检指标中已采集项的占比，范围 `0..1`。
 - `source_summary`：`order_snapshot`、`telemetry`、`protocol`、`vehicle_capacity` 四类数据源的可用状态（`available | unavailable | not_requested`）。

@@ -20,3 +20,5 @@ GET    /v1/conversations
 POST   /v1/conversations
 GET    /v1/conversations/{conversation_id}
 DELETE /v1/conversations/{conversation_id}
+POST   /v1/health-report-jobs
+GET    /v1/health-report-jobs/{job_id}
