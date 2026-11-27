@@ -877,6 +877,11 @@ def seed_target_gateway_db(db_path: str | Path, seed_doc: dict[str, Any]) -> dic
     bindings = ChatRouteBindingStore(db)
 
     # 1. 管家端（Node 执行引擎）
+    op_snapshot = {
+        "app_id": op_app_id,
+        "workflow_id": "",
+        "node_manifest": str(seed_doc["operator_manifest_text"]),
+    }
     op_existing = bindings.get(env, tenant_id, "operator", "operator_order_diagnosis")
     if op_existing is None:
         op_agt = agent_store.create(
@@ -896,11 +901,7 @@ def seed_target_gateway_db(db_path: str | Path, seed_doc: dict[str, Any]) -> dic
             op_agt.agent_id,
             tenant_id,
             1,
-            {
-                "app_id": op_app_id,
-                "workflow_id": "",
-                "node_manifest": str(seed_doc["operator_manifest_text"]),
-            },
+            op_snapshot,
             "wizard-worker",
         )
         bindings.publish(
@@ -916,6 +917,38 @@ def seed_target_gateway_db(db_path: str | Path, seed_doc: dict[str, Any]) -> dic
             expected_revision=0,
             updated_by="wizard-worker",
         )
+    else:
+        existing_op_snap = agent_store.version(
+            op_existing.agent_id, tenant_id, op_existing.agent_version_no
+        ).snapshot
+        if (
+            not isinstance(existing_op_snap, dict)
+            or existing_op_snap.get("node_manifest") != op_snapshot["node_manifest"]
+            or existing_op_snap.get("app_id") != op_app_id
+        ):
+            op_agt = agent_store.get(op_existing.agent_id, tenant_id)
+            if op_agt.status == "published":
+                op_agt = agent_store.fork_draft(op_agt.agent_id, tenant_id, op_agt.revision)
+            op_ver = agent_store.publish(
+                op_agt.agent_id,
+                tenant_id,
+                op_agt.revision,
+                op_snapshot,
+                "wizard-worker",
+            )
+            bindings.publish(
+                environment=env,
+                tenant_id=tenant_id,
+                entry="operator",
+                scenario="operator_order_diagnosis",
+                engine=ENGINE_NODE,
+                agent_id=op_agt.agent_id,
+                agent_version_no=op_ver.version_no,
+                app_id=op_app_id,
+                node_config_file=agent_runs_path,
+                expected_revision=op_existing.revision,
+                updated_by="wizard-worker",
+            )
 
     # 2. C 端（Dify Chatflow 执行引擎）
     expected_content = {

@@ -581,16 +581,43 @@ else:
     app_token = str(app_row.get('token') or app_row.get('appToken') or '')
 assert app_token, 'missing snail app token'
 
-# 查询或创建模型配置
+# 查询或创建模型配置（同步提取 Snail configJson 模型选项，避免与 GuardedChatModel OPTIONS 漂移）
 _, chats = snail_call('/ai-model/by-type/CHAT', None, token, 'GET')
 chat_models = chats.get('data') or []
-model_cfg_id = chat_models[0]['id'] if chat_models else 3
-model_key = str(chat_models[0].get('modelKey') or 'deepseek-v4-flash') if chat_models else 'deepseek-v4-flash'
+selected_cm = chat_models[0] if chat_models else None
 for cm in chat_models:
     if 'deepseek' in str(cm.get('modelKey') or '').lower():
-        model_cfg_id = cm['id']
-        model_key = str(cm.get('modelKey') or 'deepseek-v4-flash')
+        selected_cm = cm
         break
+model_cfg_id = selected_cm['id'] if selected_cm else 3
+model_key = str((selected_cm or {{}}).get('modelKey') or 'deepseek-v4-flash')
+raw_cfg = (selected_cm or {{}}).get('configJson') or {{}}
+if isinstance(raw_cfg, str):
+    try:
+        raw_cfg = json.loads(raw_cfg)
+    except Exception:
+        raw_cfg = {{}}
+if not isinstance(raw_cfg, dict):
+    raw_cfg = {{}}
+model_options = {{}}
+for src_key, alt_key, dst_key in (
+    ('temperature', 'temperature', 'temperature'),
+    ('maxTokens', 'max_tokens', 'max_tokens'),
+    ('topP', 'top_p', 'top_p'),
+    ('frequencyPenalty', 'frequency_penalty', 'frequency_penalty'),
+    ('presencePenalty', 'presence_penalty', 'presence_penalty'),
+    ('seed', 'seed', 'seed'),
+):
+    val = raw_cfg.get(src_key)
+    if val is None:
+        val = raw_cfg.get(alt_key)
+    if val is not None:
+        model_options[dst_key] = val
+stop_val = raw_cfg.get('stopSequences')
+if not isinstance(stop_val, list):
+    stop_val = raw_cfg.get('stop_sequences')
+if isinstance(stop_val, list):
+    model_options['stop_sequences'] = stop_val
 
 # 查询或创建 Agent
 agent_name = f'aiops-agent-{{ENV}}'
@@ -657,7 +684,7 @@ manifest_obj = {{
         'model_key': model_key,
         'endpoint': 'https://model-proxy:9101',
     }},
-    'model_options': {{}},
+    'model_options': model_options,
     'system_messages': ['用 charging_status_snapshot 工具取一次快照，并原样作答。'],
     'tools': [{{'name': 'charging_status_snapshot', 'description': tool_desc, 'input_schema': empty_schema}}],
 }}
