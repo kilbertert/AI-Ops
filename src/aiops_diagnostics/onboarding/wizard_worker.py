@@ -128,12 +128,15 @@ def _dev_host_cp(
     remote_dest: str,
     *,
     sha256_hex: str | None = None,
+    timeout_sec: int = 480,
     cwd: Path | None = None,
 ) -> None:
     cmd = ["dev-host", "cp", target, str(local_file), "--dest", remote_dest]
     if sha256_hex:
         cmd.extend(["--artifact-sha256", sha256_hex])
-    proc = subprocess.run(cmd, cwd=str(cwd) if cwd else None, capture_output=True, text=True, timeout=180)
+    proc = subprocess.run(
+        cmd, cwd=str(cwd) if cwd else None, capture_output=True, text=True, timeout=timeout_sec
+    )
     if proc.returncode != 0:
         raise WizardWorkerError(f"DEV_HOST_CP_FAILED:{remote_dest}")
 
@@ -236,7 +239,7 @@ class PinnedCustomerHost:
             payload = input_data.encode("utf-8") if isinstance(input_data, str) else input_data
             return subprocess.run(cmd, input=payload, capture_output=True, timeout=timeout_sec)
 
-    def copy_file(self, local_path: Path, remote_path: str, *, timeout_sec: int = 180) -> None:
+    def copy_file(self, local_path: Path, remote_path: str, *, timeout_sec: int = 480) -> None:
         with tempfile.TemporaryDirectory(prefix="aiops-pin-scp-") as tmpdir:
             tmp = Path(tmpdir)
             tmp.chmod(0o700)
@@ -858,6 +861,12 @@ def _ensure_pool_artifacts(
         )
         app_sha = hashlib.sha256(app_local.read_bytes()).hexdigest()
         inst_sha = hashlib.sha256(inst_local.read_bytes()).hexdigest()
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_dir.chmod(0o700)
+        shutil.copyfile(app_local, app_cache)
+        shutil.copyfile(inst_local, inst_cache)
+        app_cache.chmod(0o600)
+        inst_cache.chmod(0o600)
         pool_dir = f"/var/lib/aiops-41/onboarding-assets/pool-{revision[:12]}-py{python_minor}"
         app_remote = f"{pool_dir}/application-{python_minor}.tar.gz"
         inst_remote = f"{pool_dir}/installer.tar.gz"
@@ -871,12 +880,6 @@ def _ensure_pool_artifacts(
             sha256_hex=inst_sha,
             cwd=root,
         )
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        cache_dir.chmod(0o700)
-        shutil.copyfile(app_local, app_cache)
-        shutil.copyfile(inst_local, inst_cache)
-        app_cache.chmod(0o600)
-        inst_cache.chmod(0o600)
 
         reg_script = "\n".join(
             [
