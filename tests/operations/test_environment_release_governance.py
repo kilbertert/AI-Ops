@@ -239,6 +239,15 @@ def test_dispatch_release_overview_guards_control_41_and_validates_inputs(tmp_pa
         )
 
 
+def _wrap_missing_dev_host(orig_run: object):
+    def _runner(argv, *args, **kwargs):
+        if isinstance(argv, (list, tuple)) and argv and argv[0] == "dev-host":
+            raise FileNotFoundError("dev-host")
+        return orig_run(argv, *args, **kwargs)  # type: ignore[operator]
+
+    return _runner
+
+
 def test_worker_upgrade_and_rollback_verify_zero_touch_and_auto_rollback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -428,6 +437,13 @@ def test_worker_upgrade_and_rollback_verify_zero_touch_and_auto_rollback(
             "tenant_id": "1990990768688599040",
         },
     )
+    # 模拟 CI 容器环境缺失 dev-host 时，catalog 同步仍安全降级而不阻断升级
+    monkeypatch.setattr(
+        wizard_worker.subprocess,
+        "run",
+        _wrap_missing_dev_host(subprocess.run),
+    )
+
     done = wizard_worker.execute_environment_upgrade_job(
         repo,
         "41",
@@ -436,7 +452,7 @@ def test_worker_upgrade_and_rollback_verify_zero_touch_and_auto_rollback(
         pinned_factory=lambda *_a, **_kw: FakePinnedHost(),
         public_smoke_fn=lambda *_a: {"passed": True, "checks": []},
     )
-    assert done["passed"] is True
+    assert done["passed"] is True, done
     assert done["to_version"] == f"1.43.20+{rev20[:12]}"
     assert done["untouched_config_verified"] is True
     assert done["nginx_changed"] is True

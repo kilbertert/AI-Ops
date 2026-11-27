@@ -1556,12 +1556,15 @@ _LAST_RELEASE_CATALOG_DIGEST = ""
 
 def _read_pool_entries_from_central(root: Path, central_target: str) -> list[dict[str, Any]]:
     pool_remote = "/var/lib/aiops-41/onboarding-assets/artifact-pool.json"
-    proc = subprocess.run(
-        ["dev-host", "read", central_target, pool_remote],
-        cwd=str(root),
-        capture_output=True,
-        timeout=30,
-    )
+    try:
+        proc = subprocess.run(
+            ["dev-host", "read", central_target, pool_remote],
+            cwd=str(root),
+            capture_output=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
     if proc.returncode != 0 or not proc.stdout.strip():
         return []
     try:
