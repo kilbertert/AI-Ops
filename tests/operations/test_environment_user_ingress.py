@@ -29,6 +29,7 @@ from types import SimpleNamespace
 import pytest
 
 from aiops_diagnostics.conversation.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
+from aiops_diagnostics.gateway import public_openapi, user_ingress_manifest
 from aiops_diagnostics.gateway.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway.gateway_store import GatewayStore
@@ -54,8 +55,11 @@ _spec.loader.exec_module(_h5)
 
 _IDS = {
     "{qa_id}": "qa_0123456789abcdef0123456789abcdef",
+    "{file_id}": "file_0123456789abcdef0123456789abcdef",
     "{conversation_id}": "conv_0123456789abcdef0123456789abcdef",
     "{job_id}": "hrj_0123456789abcdef0123456789abcdef",
+    "{analysis_id}": "an_0123456789abcdef0123456789abcdef",
+    "{order_no}": "ORDER-2026-001",
     "{signed_id}": "media_Abcdefghijklmnopqrstuvwxyz012_-9.0123456789abcdef01234567",
 }
 
@@ -125,7 +129,8 @@ def ingress(tmp_path_factory: pytest.TempPathFactory):
         f"location / {{ return 200 '{MARKER}|$request_method|$request_uri|"
         "$http_authorization|$http_x_business_entry|$http_x_third_session|"
         "$http_third_session|$http_x_aiops_source_key|$http_x_aiops_environment|"
-        "$http_x_aiops_environment_key|$http_x_aiops_gateway_assertion|$http_cookie|'; }"
+        "$http_x_aiops_environment_key|$http_x_aiops_gateway_assertion|$http_cookie|"
+        "$http_last_event_id|'; }"
     )
     (root / "nginx.conf").write_text(
         "worker_processes 1;\n"
@@ -137,7 +142,8 @@ def ingress(tmp_path_factory: pytest.TempPathFactory):
         "  access_log off;\n"
         f"  client_body_temp_path {root / 'body'};\n"
         f"  proxy_temp_path {root / 'proxy'};\n"
-        f"  server {{\n    listen 127.0.0.1:{upstream_port};\n    {echo}\n  }}\n"
+        f"  server {{\n    listen 127.0.0.1:{upstream_port};\n"
+        f"    client_max_body_size 25m;\n    {echo}\n  }}\n"
         f"  server {{\n    listen 127.0.0.1:{proxy_port};\n"
         f"    access_log {root / 'access.log'};\n{site}\n"
         "    location / { return 404; }\n  }\n"
@@ -161,19 +167,26 @@ def ingress(tmp_path_factory: pytest.TempPathFactory):
         stderr=subprocess.DEVNULL,
     )
 
-    def request(method: str, path: str, headers: dict[str, str] | None = None):
+    def request(
+        method: str,
+        path: str,
+        headers: dict[str, str] | None = None,
+        *,
+        body: bytes = b"",
+    ):
         head = "".join(f"{k}: {v}\r\n" for k, v in (headers or {}).items())
         for _ in range(50):
             try:
-                with socket.create_connection(("127.0.0.1", proxy_port), timeout=0.2) as sock:
+                with socket.create_connection(("127.0.0.1", proxy_port), timeout=2.0) as sock:
                     sock.sendall(
                         f"{method} {path} HTTP/1.1\r\nHost: env.test\r\n{head}"
-                        "Content-Length: 0\r\nConnection: close\r\n\r\n".encode()
+                        f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()
+                        + body
                     )
                     raw = sock.makefile("rb").read()
                 status = int(raw.split(b" ", 2)[1])
-                body = raw.rsplit(b"\r\n\r\n", 1)[-1].decode("utf-8", "replace")
-                return status, body
+                resp_body = raw.rsplit(b"\r\n\r\n", 1)[-1].decode("utf-8", "replace")
+                return status, resp_body
             except OSError:
                 if nginx.poll() is not None:
                     break
@@ -203,7 +216,7 @@ def ingress(tmp_path_factory: pytest.TempPathFactory):
 
 def _fields(body: str) -> list[str]:
     """回显体按位拆字段：[marker, method, uri, auth, entry, x3rd, third, src,
-    env, envkey, assertion, cookie, '']。"""
+    env, envkey, assertion, cookie, last_event_id, '']。"""
     return body.split("|")
 
 
@@ -230,6 +243,17 @@ def test_declaration_is_nonempty() -> None:
     rows = _declared()
     assert rows, f"{DECLARED.name} 里没解析出任何路由"
     assert ("POST", "/v1/assistant/questions") in rows
+    assert ("GET", "/v1/shortcuts") in rows
+
+
+def test_manifest_is_in_sync_with_public_openapi_and_repo_files() -> None:
+    """客户入口声明与 Nginx 片段必须与 public_openapi.OPERATIONS 单一真源逐字节同步（ADR-0362）。"""
+    expected = {(m.upper(), p) for m, p in public_openapi.OPERATIONS} | {
+        (m.upper(), p) for m, p in user_ingress_manifest.COMPAT_USER_INGRESS_OPERATIONS
+    }
+    assert set(user_ingress_manifest.expected_user_ingress_routes()) == expected
+    assert DECLARED.read_text("utf-8") == user_ingress_manifest.render_routes_txt()
+    assert CONF.read_text("utf-8") == user_ingress_manifest.render_nginx_conf()
 
 
 @pytest.mark.parametrize(("method", "path"), _declared())
@@ -353,18 +377,35 @@ def test_piece_paths_never_reach_access_log_but_company_paths_do(ingress) -> Non
         ("POST", "/v1/faq/catalog"),
         ("HEAD", "/v1/faq/catalog"),
         ("GET", "/v1/faq/answer"),
-        ("GET", "/v1/assistant/questions"),  # 列表未开放
+        ("POST", "/v1/shortcuts"),  # 方法也是边界：GET 公开、POST 属于管理接口
+        ("PUT", "/v1/shortcuts"),
+        ("POST", "/v1/assistant/agents"),
+        ("POST", "/v1/assistant/starters"),
+        ("POST", "/v1/banner"),
+        ("GET", "/v1/assistant/files"),
+        ("DELETE", "/v1/assistant/questions"),
         ("POST", "/v1/assistant/questions/qa_0123456789abcdef0123456789abcdef"),
+        ("POST", "/v1/assistant/questions/qa_0123456789abcdef0123456789abcdef/events"),
         ("GET", "/v1/assistant/questions/qa_0123456789abcdef0123456789abcdef/cancel"),
         ("PUT", "/v1/assistant/questions/qa_0123456789abcdef0123456789abcdef/cancel"),
+        ("GET", "/v1/assistant/questions/qa_0123456789abcdef0123456789abcdef/regenerate"),
+        ("GET", "/v1/assistant/questions/qa_0123456789abcdef0123456789abcdef/feedback"),
+        ("GET", "/v1/assistant/questions/qa_0123456789abcdef0123456789abcdef/export"),
+        ("POST", "/v1/assistant/files/file_0123456789abcdef0123456789abcdef"),
+        ("POST", "/v1/assistant/files/file_0123456789abcdef0123456789abcdef/preview"),
+        ("GET", "/v1/assistant/files/file_0123456789abcdef0123456789abcdef/download-task"),
         ("POST", "/v1/media/media_Abcdefghijklmnopqrstuvwxyz012_-9.0123456789abcdef01234567"),
         ("DELETE", "/v1/conversations"),
         ("PUT", "/v1/conversations/conv_0123456789abcdef0123456789abcdef"),
         ("POST", "/v1/conversations/conv_0123456789abcdef0123456789abcdef"),
+        ("POST", "/v1/orders/ORDER-2026-001/access"),
+        ("POST", "/v1/sites"),
         ("GET", "/v1/health-report-jobs"),
         ("DELETE", "/v1/health-report-jobs"),
         ("POST", "/v1/health-report-jobs/hrj_0123456789abcdef0123456789abcdef"),
         ("DELETE", "/v1/health-report-jobs/hrj_0123456789abcdef0123456789abcdef"),
+        ("GET", "/v1/standard/analyses"),
+        ("POST", "/v1/standard/analyses/an_0123456789abcdef0123456789abcdef"),
     ],
 )
 def test_undeclared_method_on_exposed_path_is_405_or_404(ingress, method: str, path: str) -> None:
@@ -379,11 +420,17 @@ def test_management_and_internal_paths_never_forwarded(ingress) -> None:
         ("POST", "/v1/dify/manage"),
         ("GET", "/v1/dify/workspace"),
         ("POST", "/v1/agents"),
+        ("GET", "/v1/agents"),
+        ("POST", "/v1/shortcuts"),
+        ("GET", "/v1/shortcuts/sc_1"),
+        ("GET", "/v1/openapi.json"),
+        ("GET", "/v1/docs"),
         ("POST", "/v1/internal/execution-node/capabilities"),
         ("POST", "/v1/internal/consumer-data/status"),
-        ("GET", "/v1/assistant/starters"),
-        ("GET", "/v1/shortcuts"),
         ("POST", "/v1/conversations/conv_0123456789abcdef0123456789abcdef/active-order"),
+        ("GET", "/v1/orders/ORDER-2026-001/charging-status"),
+        ("POST", "/v1/orders/ORDER-2026-001/charging-status/delegated"),
+        ("GET", "/v1/orders/bad..id/access"),
     ]:
         status, body = ingress(method, path, CONSUMER)
         assert status in (404, 405), f"{method} {path} 泄漏到上游：{status}"
@@ -396,8 +443,13 @@ def test_id_prefix_shape_guard_rejects_malformed_and_suffixed(ingress) -> None:
         "/v1/assistant/questions/",
         "/v1/assistant/questions/qa_0123",
         "/v1/assistant/questions/qa_0123456789abcdef0123456789abcdef/",
+        "/v1/assistant/questions/qa_0123456789abcdef0123456789abcdef/events/extra",
         "/v1/assistant/questions/qa_0123456789abcdef0123456789abcdef/cancel/extra",
         "/v1/assistant/questions/notqa_0123456789abcdef0123456789abcdef",
+        "/v1/assistant/files/",
+        "/v1/assistant/files/file_0123",
+        "/v1/assistant/files/notfile_0123456789abcdef0123456789abcdef",
+        "/v1/assistant/files/file_0123456789abcdef0123456789abcdef/preview/extra",
         "/v1/media/",
         "/v1/media/media_tooshort.0123456789abcdef01234567",
         "/v1/media/media_Abcdefghijklmnopqrstuvwxyz012_-9.0123456789abcdef01234567x",
@@ -406,15 +458,57 @@ def test_id_prefix_shape_guard_rejects_malformed_and_suffixed(ingress) -> None:
         "/v1/conversations/",
         "/v1/conversations/conv_0123456789abcdef0123456789abcde",
         "/v1/conversations/conv_0123456789abcdef0123456789abcdef/",
+        "/v1/orders/ORDER-2026-001",
+        "/v1/orders/bad..id/access",
+        "/v1/orders/ORDER-2026-001/access/extra",
         "/v1/health-report-jobs/",
         "/v1/health-report-jobs/hrj_0123",
         "/v1/health-report-jobs/hrj_0123456789abcdef0123456789abcdef/",
         "/v1/health-report-jobs/hrj_0123456789abcdef0123456789abcdef/cancel",
         "/v1/health-report-jobs/nothrj_0123456789abcdef0123456789abcdef",
+        "/v1/standard/analyses/",
+        "/v1/standard/analyses/an_0123",
+        "/v1/standard/analyses/notan_0123456789abcdef0123456789abcdef",
+        "/v1/standard/analyses/an_0123456789abcdef0123456789abcdef/",
     ]:
         status, body = ingress("GET", path, CONSUMER)
         assert status == 404, f"{path} 应被形状闸 404，得到 {status}"
         assert MARKER not in body
+
+
+def test_sse_events_forwards_last_event_id_and_enforces_entry_and_log_isolation(ingress) -> None:
+    events_path = "/v1/assistant/questions/qa_0123456789abcdef0123456789abcdef/events"
+    status, body = ingress("GET", events_path, {**OPERATOR, "Last-Event-ID": "42"})
+    assert status == 200
+    f = _fields(body)
+    assert f[0] == MARKER and f[4] == "operator" and f[7] == OPERATOR_SOURCE_KEY
+    assert f[12] == "42", f"SSE 断线续传应透传 Last-Event-ID：{f!r}"
+
+    bad_status, bad_body = ingress("GET", events_path, {"X-Business-Entry": "admin"})
+    assert bad_status == 403 and MARKER not in bad_body
+
+    time.sleep(0.1)
+    log = ingress.access_log.read_text("utf-8")
+    assert "/events" not in log, f"SSE 事件流 URI 不得进 access_log：{log!r}"
+
+
+def test_attachment_upload_allows_over_64k_while_regular_routes_stay_capped(ingress) -> None:
+    payload = b"x" * (128 * 1024)
+    status_upload, body_upload = ingress(
+        "POST",
+        "/v1/assistant/files",
+        {**OPERATOR, "Content-Type": "application/octet-stream"},
+        body=payload,
+    )
+    assert status_upload == 200 and _fields(body_upload)[0] == MARKER
+
+    status_regular, _ = ingress(
+        "POST",
+        "/v1/faq/answer",
+        {**CONSUMER, "Content-Type": "application/json"},
+        body=payload,
+    )
+    assert status_regular == 413, f"普通路由应维持 64k 上限，得到 {status_regular}"
 
 
 def test_no_other_gateway_route_is_forwarded(ingress, tmp_path) -> None:
@@ -732,3 +826,19 @@ def test_seam_media_signature_serves_real_bytes(seam) -> None:
     forged = signed[:-1] + ("0" if signed[-1] != "0" else "1")
     status, _ = seam.request("GET", f"/v1/media/{forged}")
     assert status == 403, "形状合法但签名被改 → 真 Gateway 的答案是 403"
+
+
+def test_seam_shortcuts_accessible_for_consumer_and_operator_while_post_blocked(seam) -> None:
+    for headers in (
+        {"X-Business-Entry": "consumer", "third-session": "sess-c"},
+        {"X-Business-Entry": "operator", "Authorization": "Bearer op-jwt"},
+    ):
+        status, body = seam.request("GET", "/v1/shortcuts", headers)
+        assert status == 200, body
+        assert "shortcut_list" in body
+    post_status, _ = seam.request(
+        "POST",
+        "/v1/shortcuts",
+        {"X-Business-Entry": "operator", "Authorization": "Bearer op-jwt"},
+    )
+    assert post_status == 405, f"POST /v1/shortcuts 管理方法应被 nginx 405 挡住，得到 {post_status}"

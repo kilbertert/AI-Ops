@@ -15,6 +15,12 @@
 > 不事后补写（事后凭 commit 标题重构「用户感知」是编造），历史缺口原样保留。
 > 当前缺口：`1.29.0`–`1.40.0`（截至 2026-11-23）。
 
+## [1.43.21] - 2026-11-27
+
+### Changed
+- 客户环境公网 HTTPS 用户入口（`environment-user-ingress.conf` / `environment-user-ingress-routes.txt`）统一改为以 Gateway 公开 OpenAPI 契约（`public_openapi.OPERATIONS` + `POST /v1/conversations`）为单一真源自动生成，并纳入 CI 双向门禁与 ADR-0361 Day-2 自动同步。
+- 一次性打通此前缺失的 18 条用户/管家公开接口（含 `GET /v1/shortcuts`、开场白/横幅/智能体列表、SSE 流式 `/events`、`Last-Event-ID` 透传、25MiB 附件上传/解析/预览/下载任务、订单接入核验、站点清单、时间窗分析等），管理面、内部回调与非公开端点保持严格封堵。
+
 ## [1.40.2] - 2026-11-23
 
 ### Fixed
