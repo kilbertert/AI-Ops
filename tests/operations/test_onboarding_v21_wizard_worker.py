@@ -1296,6 +1296,81 @@ def test_step_execution_node_normalizes_jar_filename_perms_and_checks_running(mo
     assert "Heartbeat rejected" in script
 
 
+def test_step_cold_install_upgrades_existing_venv_when_installed_json_sha_differs(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import hashlib
+
+    from aiops_diagnostics.onboarding import wizard_worker
+
+    repo_root = Path(__file__).resolve().parents[2]
+    app_tar = tmp_path / "app.tar.gz"
+    inst_tar = tmp_path / "inst.tar.gz"
+    app_tar.write_bytes(b"app-bytes")
+    inst_tar.write_bytes(b"inst-bytes")
+    app_sha = hashlib.sha256(b"app-bytes").hexdigest()
+    inst_sha = hashlib.sha256(b"inst-bytes").hexdigest()
+    payloads = {
+        "/tmp/boot.env": b"BOOT=1\n",
+        "/tmp/tpl.env": b"TPL=1\n",
+        "/tmp/rt.tar": b"rt-bytes",
+        "/tmp/auth.conf": b"set $k 1;\n",
+    }
+    shas = {k: hashlib.sha256(v).hexdigest() for k, v in payloads.items()}
+
+    monkeypatch.setattr(
+        wizard_worker,
+        "_ensure_pool_artifacts",
+        lambda *_a, **_k: {
+            "revision": "0" * 40,
+            "python_minor": "3.12",
+            "app_remote": "/remote/app.tar.gz",
+            "app_sha256": app_sha,
+            "app_local": str(app_tar),
+            "inst_remote": "/remote/inst.tar.gz",
+            "inst_sha256": inst_sha,
+            "inst_local": str(inst_tar),
+        },
+    )
+    monkeypatch.setattr(wizard_worker, "_dev_host_read", lambda _t, path, **_k: payloads[path])
+
+    cmds: list[str] = []
+
+    class _FakeHost:
+        def copy_file(self, _src: Path, _dst: str) -> None:
+            return None
+
+        def run_cmd(self, cmd: str, **_kwargs):
+            cmds.append(cmd)
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    res = wizard_worker._step_cold_install_and_onboard(
+        repo_root,
+        "41",
+        lambda _req: {
+            "ok": True,
+            "bootstrap_config_path": "/tmp/boot.env",
+            "bootstrap_config_sha256": shas["/tmp/boot.env"],
+            "config_path": "/tmp/tpl.env",
+            "config_sha256": shas["/tmp/tpl.env"],
+            "runtime_bundle_path": "/tmp/rt.tar",
+            "runtime_bundle_sha256": shas["/tmp/rt.tar"],
+            "nginx_auth_path": "/tmp/auth.conf",
+            "nginx_auth_sha256": shas["/tmp/auth.conf"],
+        },
+        {"environment": "jiejia", "api_domain": "api.juxichongdian.cn", "tenant_id": "1990990768688599040"},
+        pinned_host=_FakeHost(),
+    )
+    assert res["ok"] is True
+    install_sh = cmds[-1]
+    assert "artifact_sha256" in install_sh
+    assert "PIP_CONFIG_FILE" in install_sh
+    assert "os.umask(0o022)" in install_sh
+    assert "installed.json" in install_sh
+    assert install_sh.index("systemctl stop") < install_sh.index("artifact_sha256")
+    assert install_sh.index("artifact_sha256") < install_sh.index("seed_target_gateway_db")
+
+
 def test_consumer_knowledge_catalogue_accepts_delegated_kdx_token(tmp_path: Path, monkeypatch) -> None:
     from fastapi import FastAPI
 
