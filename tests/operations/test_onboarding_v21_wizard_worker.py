@@ -1294,6 +1294,93 @@ def test_step_execution_node_normalizes_jar_filename_perms_and_checks_running(mo
     assert "Snail-Ai-Token" in script
     assert "chatModelId" in script
     assert "Heartbeat rejected" in script
+    assert "(selected_cm or {}).get('configJson')" in script
+    assert "'model_options': model_options" in script
+    assert "('maxTokens', 'max_tokens', 'max_tokens')" in script
+
+
+def test_seed_target_gateway_db_upgrades_operator_manifest_when_model_options_change(tmp_path: Path) -> None:
+    from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
+    from aiops_diagnostics.onboarding import wizard_provision
+    from aiops_diagnostics.publication.agent_lifecycle import AgentStore
+
+    env = "jiejia"
+    tenant_id = "1990990768688599040"
+    db = tmp_path / "target-gateway.db"
+    key_dir = tmp_path / "dify-keys"
+    key_dir.mkdir(mode=0o700)
+    (key_dir / "con-app-1.key").write_text("app-secret-key\n", encoding="utf-8")
+    (key_dir / "con-app-1.key").chmod(0o600)
+    agent_runs_file = tmp_path / "agent-runs.json"
+    agent_runs_file.write_text(
+        json.dumps(
+            {
+                "environment": env,
+                "snail_base_url": "https://api.mall.qushiyun.com",
+                "snail_app_id": "aiops-environment-jiejia",
+                "snail_app_token": "SAI_test",
+                "snail_agent_id": 4,
+                "snail_open_id": "open1234",
+                "expected_node_id": f"node-{env}",
+                "nodes": [{"node_id": f"node-{env}", "environment": env, "token_sha256": "a" * 64}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    agent_runs_file.chmod(0o600)
+
+    def _manifest(model_options: dict[str, object]) -> str:
+        return json.dumps(
+            {
+                "schema": "m3-exec-config/1",
+                "name": "aiops-environment-jiejia",
+                "history_policy": "none",
+                "model": {
+                    "provider_key": "openai",
+                    "adapter_key": "openai-compatible",
+                    "model_key": "deepseek-v4-1-flash-261017",
+                    "endpoint": "https://model-proxy:9101",
+                },
+                "model_options": model_options,
+                "system_messages": ["hi"],
+                "tools": [{"name": "mysql_readonly", "description": "query", "input_schema": "{}"}],
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    base_seed = {
+        "environment": env,
+        "tenant_id": tenant_id,
+        "workspace_id": "ws-jiejia",
+        "operator_app_id": "op-app-1",
+        "consumer_app_id": "con-app-1",
+        "consumer_workflow_id": "8d57d206-1f35-41fc-9c56-d76218eed413",
+        "consumer_kb_id": "kb-con-1",
+        "consumer_flags": {"live_order_status": True, "live_billing_record": True, "photo_enabled": False},
+        "operator_manifest_text": _manifest({}),
+        "agent_runs_path": str(agent_runs_file),
+        "key_dir": str(key_dir),
+    }
+    assert wizard_provision.seed_target_gateway_db(db, base_seed)["ok"] is True
+
+    updated_seed = {
+        **base_seed,
+        "operator_manifest_text": _manifest({"max_tokens": 4096, "temperature": 0.3}),
+    }
+    assert wizard_provision.seed_target_gateway_db(db, updated_seed)["ok"] is True
+    # Repeat identical seed must remain idempotent
+    assert wizard_provision.seed_target_gateway_db(db, updated_seed)["ok"] is True
+
+    bindings = ChatRouteBindingStore(db)
+    agents = AgentStore(db)
+    op_binding = bindings.get(env, tenant_id, "operator", "operator_order_diagnosis")
+    assert op_binding is not None
+    assert op_binding.agent_version_no == 2
+    assert op_binding.revision == 2
+    snap = agents.version(op_binding.agent_id, tenant_id, op_binding.agent_version_no).snapshot
+    assert json.loads(snap["node_manifest"])["model_options"] == {"max_tokens": 4096, "temperature": 0.3}
 
 
 def test_step_cold_install_upgrades_existing_venv_when_installed_json_sha_differs(
