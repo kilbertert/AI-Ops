@@ -13,6 +13,15 @@ import {
 import { Button } from '@langgenius/dify-ui/button'
 import { Checkbox } from '@langgenius/dify-ui/checkbox'
 import { Input } from '@langgenius/dify-ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectItemIndicator,
+  SelectItemText,
+  SelectTrigger,
+  SelectValue,
+} from '@langgenius/dify-ui/select'
 import { StatusDot } from '@langgenius/dify-ui/status-dot'
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from '@/next/navigation'
@@ -1645,7 +1654,7 @@ export default function EnvironmentManagement() {
                 <div
                   role="tablist"
                   aria-label="工作区视图切换"
-                  className="-mb-px flex flex-wrap gap-6 border-t border-divider-subtle px-5 pt-1 sm:px-6"
+                  className="flex flex-wrap gap-6 border-t border-divider-subtle px-5 pt-1 sm:px-6"
                 >
                   {(
                     [
@@ -1673,7 +1682,7 @@ export default function EnvironmentManagement() {
                       ],
                     ] as const
                   ).map(([tab, label, iconClass, badge, warnDot], idx, list) => {
-                    const isCurrent = activeTab === tab
+                    const isCurrent = !showWizard && activeTab === tab
                     return (
                       <button
                         key={tab}
@@ -1682,23 +1691,32 @@ export default function EnvironmentManagement() {
                         role="tab"
                         aria-selected={isCurrent}
                         aria-controls={`aiops-panel-${tab}`}
-                        tabIndex={isCurrent ? 0 : -1}
-                        onClick={() => setActiveTab(tab)}
+                        tabIndex={isCurrent || (showWizard && idx === 0) ? 0 : -1}
+                        onClick={() => {
+                          setShowWizard(false)
+                          setActiveTab(tab)
+                        }}
                         onKeyDown={(event) => {
                           if (event.key === 'ArrowRight') {
                             event.preventDefault()
                             const next = list[(idx + 1) % list.length]?.[0]
-                            if (next) setActiveTab(next)
+                            if (next) {
+                              setShowWizard(false)
+                              setActiveTab(next)
+                            }
                           } else if (event.key === 'ArrowLeft') {
                             event.preventDefault()
                             const prev = list[(idx - 1 + list.length) % list.length]?.[0]
-                            if (prev) setActiveTab(prev)
+                            if (prev) {
+                              setShowWizard(false)
+                              setActiveTab(prev)
+                            }
                           }
                         }}
-                        className={`relative inline-flex cursor-pointer items-center gap-2 border-b-2 py-3 system-sm-medium transition-colors ${
+                        className={`relative inline-flex cursor-pointer items-center gap-2 py-3 system-sm-medium transition-colors ${
                           isCurrent
-                            ? 'border-state-accent-solid text-text-accent'
-                            : 'border-transparent text-text-tertiary hover:text-text-primary'
+                            ? 'text-text-accent'
+                            : 'text-text-tertiary hover:text-text-primary'
                         }`}
                       >
                         <span aria-hidden="true" className={`${iconClass} size-4`} />
@@ -1715,6 +1733,12 @@ export default function EnvironmentManagement() {
                           </span>
                         )}
                         {warnDot && <StatusDot status="warning" size="small" />}
+                        {isCurrent && (
+                          <span
+                            aria-hidden="true"
+                            className="absolute inset-x-0 bottom-0 h-[2.5px] rounded-t-full bg-state-accent-solid"
+                          />
+                        )}
                       </button>
                     )
                   })}
@@ -2085,28 +2109,40 @@ export default function EnvironmentManagement() {
                               </div>
 
                               <div className="grid gap-3.5 md:grid-cols-2">
-                                <label className="block space-y-1.5 system-xs-medium text-text-secondary">
+                                <div className="space-y-1.5 system-xs-medium text-text-secondary">
                                   <span>候选客服来源版本</span>
-                                  <div className="relative">
-                                    <select
+                                  <Select
+                                    value={consumerSource || null}
+                                    onValueChange={(value) => setConsumerSource(value ?? '')}
+                                  >
+                                    <SelectTrigger
                                       aria-label="候选客服来源版本"
-                                      className="block h-9 w-full appearance-none rounded-lg border border-divider-regular bg-components-panel-bg pr-8 pl-3 system-sm-regular text-text-primary focus:border-state-accent-solid focus:outline-hidden"
-                                      value={consumerSource}
-                                      onChange={(event) => setConsumerSource(event.target.value)}
+                                      size="large"
+                                      className="border border-divider-regular bg-components-panel-bg text-xs"
                                     >
-                                      <option value="">请选择已发布模板</option>
+                                      <SelectValue placeholder="请选择已发布模板">
+                                        {(() => {
+                                          const found = consumerSources.find(
+                                            (s) => s.app_id === consumerSource,
+                                          )
+                                          return found
+                                            ? `${found.name} · v${found.version_no}`
+                                            : '请选择已发布模板'
+                                        })()}
+                                      </SelectValue>
+                                    </SelectTrigger>
+                                    <SelectContent className="w-(--anchor-width)">
                                       {consumerSources.map((source) => (
-                                        <option key={source.app_id} value={source.app_id}>
-                                          {source.name} · v{source.version_no}
-                                        </option>
+                                        <SelectItem key={source.app_id} value={source.app_id}>
+                                          <SelectItemText>
+                                            {source.name} · v{source.version_no}
+                                          </SelectItemText>
+                                          <SelectItemIndicator />
+                                        </SelectItem>
                                       ))}
-                                    </select>
-                                    <span
-                                      aria-hidden="true"
-                                      className="pointer-events-none absolute top-1/2 right-2.5 i-ri-arrow-down-s-line size-4 -translate-y-1/2 text-text-tertiary"
-                                    />
-                                  </div>
-                                </label>
+                                    </SelectContent>
+                                  </Select>
+                                </div>
 
                                 <label className="block space-y-1.5 system-xs-medium text-text-secondary">
                                   <span>一键开通验收案例（选填，填写后自动三业务验证）</span>
@@ -2124,13 +2160,11 @@ export default function EnvironmentManagement() {
                                 </label>
                               </div>
 
-                              <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-components-panel-bg/80 px-3 py-2 system-xs-regular text-text-secondary">
-                                <input
-                                  type="checkbox"
+                              <label className="inline-flex cursor-pointer items-center gap-2.5 rounded-lg bg-components-panel-bg/80 px-3 py-2 system-xs-regular text-text-secondary">
+                                <Checkbox
                                   aria-label="一键开通包含空机初装"
-                                  className="size-4 rounded border-divider-regular"
                                   checked={onboardInitial}
-                                  onChange={(event) => setOnboardInitial(event.target.checked)}
+                                  onCheckedChange={(value) => setOnboardInitial(value === true)}
                                 />
                                 <span>包含空机初装（仅首次空白目标主机勾选）</span>
                               </label>
@@ -2181,6 +2215,11 @@ export default function EnvironmentManagement() {
                                         type="button"
                                         variant={consumerSource ? 'primary' : 'secondary'}
                                         size="medium"
+                                        title={
+                                          !consumerSource
+                                            ? '请先选择上方「候选客服来源版本」'
+                                            : undefined
+                                        }
                                         disabled={
                                           busy ||
                                           plan.state === 'expired' ||
@@ -2218,9 +2257,13 @@ export default function EnvironmentManagement() {
                           )}
 
                           {/* 折叠收纳：计划摘要与高级分步运维工具 */}
-                          <details className="rounded-xl border border-divider-subtle bg-background-section-burn/50 px-4 py-2.5">
-                            <summary className="cursor-pointer system-xs-medium text-text-tertiary select-none hover:text-text-primary">
-                              高级操作与计划校验摘要（分步准备 / 主机核验 / SHA）
+                          <details className="group rounded-xl border border-divider-subtle bg-background-section-burn/50 px-4 py-2.5">
+                            <summary className="flex cursor-pointer list-none items-center justify-between gap-2 system-xs-medium text-text-tertiary select-none hover:text-text-primary [&::-webkit-details-marker]:hidden">
+                              <span>高级操作与计划校验摘要（分步准备 / 主机核验 / SHA）</span>
+                              <span
+                                aria-hidden="true"
+                                className="i-ri-arrow-down-s-line size-4 shrink-0 transition-transform group-open:rotate-180"
+                              />
                             </summary>
                             <div className="mt-3 space-y-3 border-t border-divider-subtle pt-3">
                               <div className="flex flex-wrap gap-2">
@@ -2522,11 +2565,15 @@ export default function EnvironmentManagement() {
                                         />
                                         <span>知识空间与业务验收</span>
                                       </div>
-                                      <div className="text-text-secondary">
-                                        {tenant.knowledge.knowledge_base_id
-                                          ? `已连接（${tenant.knowledge.active_grants} 项授权）`
-                                          : '未准备'}
-                                        {' · 业务准确性：待人工确认'}
+                                      <div className="space-y-0.5 text-text-secondary">
+                                        <div>
+                                          {tenant.knowledge.knowledge_base_id
+                                            ? `已连接（${tenant.knowledge.active_grants} 项授权）`
+                                            : '未准备'}
+                                        </div>
+                                        <div className="text-[11px] text-text-tertiary">
+                                          业务准确性：待人工确认
+                                        </div>
                                       </div>
                                     </div>
                                   </div>
@@ -2752,9 +2799,13 @@ export default function EnvironmentManagement() {
                                     )}
                                 </section>
 
-                                <details className="text-text-tertiary">
-                                  <summary className="cursor-pointer text-[11px] select-none hover:text-text-primary">
-                                    查看任务编号与技术详情
+                                <details className="group text-text-tertiary">
+                                  <summary className="inline-flex cursor-pointer list-none items-center gap-1 text-[11px] select-none hover:text-text-primary [&::-webkit-details-marker]:hidden">
+                                    <span>查看任务编号与技术详情</span>
+                                    <span
+                                      aria-hidden="true"
+                                      className="i-ri-arrow-down-s-line size-3.5 transition-transform group-open:rotate-180"
+                                    />
                                   </summary>
                                   <div className="mt-2 flex flex-wrap gap-2">
                                     <CopyableChip label="任务" value={item.id} />
@@ -3204,9 +3255,13 @@ export default function EnvironmentManagement() {
                                     </StatusPill>
                                   </div>
                                   {node.available_tools.length > 0 && (
-                                    <details>
-                                      <summary className="cursor-pointer text-[11px] text-text-tertiary select-none hover:text-text-primary">
-                                        展开工具清单（{node.available_tools.length}）
+                                    <details className="group">
+                                      <summary className="inline-flex cursor-pointer list-none items-center gap-1 text-[11px] text-text-tertiary select-none hover:text-text-primary [&::-webkit-details-marker]:hidden">
+                                        <span>展开工具清单（{node.available_tools.length}）</span>
+                                        <span
+                                          aria-hidden="true"
+                                          className="i-ri-arrow-down-s-line size-3.5 transition-transform group-open:rotate-180"
+                                        />
                                       </summary>
                                       <div className="mt-2 flex flex-wrap gap-1.5">
                                         {node.available_tools.map((tool) => (
@@ -3799,15 +3854,17 @@ export default function EnvironmentManagement() {
                                         }).map(([key, label]) => (
                                           <label
                                             key={key}
-                                            className="flex cursor-pointer items-center gap-1.5 system-xs-regular text-text-secondary"
+                                            className="flex cursor-pointer items-center gap-2 system-xs-regular text-text-secondary"
                                           >
-                                            <input
-                                              type="checkbox"
+                                            <Checkbox
+                                              aria-label={label}
                                               checked={capabilities.includes(key)}
-                                              onChange={(e) =>
+                                              onCheckedChange={(checked) =>
                                                 setCapabilities((values) =>
-                                                  e.target.checked
-                                                    ? [...values, key]
+                                                  checked === true
+                                                    ? values.includes(key)
+                                                      ? values
+                                                      : [...values, key]
                                                     : values.filter((value) => value !== key),
                                                 )
                                               }
@@ -4019,24 +4076,45 @@ export default function EnvironmentManagement() {
                                     </div>
                                     {consumerSources.length > 0 && (
                                       <div className="flex flex-wrap items-end gap-2">
-                                        <label className="min-w-52 flex-1 space-y-1 system-xs-medium text-text-secondary">
+                                        <div className="min-w-52 flex-1 space-y-1 system-xs-medium text-text-secondary">
                                           <span>消费者来源模板：{item.tenant_id}</span>
-                                          <select
-                                            className="block h-8 w-full rounded-lg border border-divider-regular bg-components-panel-bg px-2.5 system-xs-regular text-text-primary"
-                                            aria-label={`消费者来源模板：${item.tenant_id}`}
-                                            value={consumerSource}
-                                            onChange={(event) =>
-                                              setConsumerSource(event.target.value)
+                                          <Select
+                                            value={consumerSource || null}
+                                            onValueChange={(value) =>
+                                              setConsumerSource(value ?? '')
                                             }
                                           >
-                                            <option value="">请选择已发布模板</option>
-                                            {consumerSources.map((source) => (
-                                              <option key={source.app_id} value={source.app_id}>
-                                                {source.name} · v{source.version_no}
-                                              </option>
-                                            ))}
-                                          </select>
-                                        </label>
+                                            <SelectTrigger
+                                              aria-label={`消费者来源模板：${item.tenant_id}`}
+                                              size="medium"
+                                              className="border border-divider-regular bg-components-panel-bg text-xs"
+                                            >
+                                              <SelectValue placeholder="请选择已发布模板">
+                                                {(() => {
+                                                  const found = consumerSources.find(
+                                                    (s) => s.app_id === consumerSource,
+                                                  )
+                                                  return found
+                                                    ? `${found.name} · v${found.version_no}`
+                                                    : '请选择已发布模板'
+                                                })()}
+                                              </SelectValue>
+                                            </SelectTrigger>
+                                            <SelectContent className="w-(--anchor-width)">
+                                              {consumerSources.map((source) => (
+                                                <SelectItem
+                                                  key={source.app_id}
+                                                  value={source.app_id}
+                                                >
+                                                  <SelectItemText>
+                                                    {source.name} · v{source.version_no}
+                                                  </SelectItemText>
+                                                  <SelectItemIndicator />
+                                                </SelectItem>
+                                              ))}
+                                            </SelectContent>
+                                          </Select>
+                                        </div>
                                         <Button
                                           type="button"
                                           variant="secondary"

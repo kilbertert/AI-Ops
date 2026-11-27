@@ -1,6 +1,7 @@
 'use client'
 
 import { Button } from '@langgenius/dify-ui/button'
+import { Popover, PopoverContent, PopoverTrigger } from '@langgenius/dify-ui/popover'
 import { useEffect, useState } from 'react'
 import { manage } from '@/service/aiops-management'
 
@@ -124,8 +125,24 @@ export default function EnvironmentReleasesPanel({
   const [busy, setBusy] = useState(false)
   const [confirmUpgrade, setConfirmUpgrade] = useState(false)
   const [confirmRollback, setConfirmRollback] = useState(false)
+  const [releasePickerOpen, setReleasePickerOpen] = useState(false)
+  const [releaseQuery, setReleaseQuery] = useState('')
+  const [gatewayCopied, setGatewayCopied] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+
+  function copyGatewayUrl(url: string) {
+    if (!url) return
+    const markCopied = () => {
+      setGatewayCopied(true)
+      window.setTimeout(() => setGatewayCopied(false), 1500)
+    }
+    if (navigator.clipboard?.writeText) {
+      void navigator.clipboard.writeText(url).then(markCopied).catch(markCopied)
+      return
+    }
+    markCopied()
+  }
 
   async function loadOverview(envId: string) {
     if (!envId) return
@@ -151,6 +168,8 @@ export default function EnvironmentReleasesPanel({
   useEffect(() => {
     setConfirmUpgrade(false)
     setConfirmRollback(false)
+    setReleasePickerOpen(false)
+    setReleaseQuery('')
     setActiveJob(null)
     setNotice('')
     setError('')
@@ -268,6 +287,16 @@ export default function EnvironmentReleasesPanel({
 
   const releases = overview?.available_releases || []
   const selectedRelease = releases.find((item) => item.tag === selectedTag) || releases[0] || null
+  const normalizedReleaseQuery = releaseQuery.trim().toLowerCase()
+  const filteredReleases = normalizedReleaseQuery
+    ? releases.filter(
+        (item) =>
+          item.tag.toLowerCase().includes(normalizedReleaseQuery) ||
+          item.full_version.toLowerCase().includes(normalizedReleaseQuery) ||
+          item.short_sha.toLowerCase().includes(normalizedReleaseQuery) ||
+          (item.summary || '').toLowerCase().includes(normalizedReleaseQuery),
+      )
+    : releases
   const envIsControl = Boolean(isControl || overview?.is_control)
   const sameAsCurrent = Boolean(
     selectedRelease &&
@@ -316,7 +345,10 @@ export default function EnvironmentReleasesPanel({
                 <h3 className="system-md-semibold text-text-primary">
                   当前运行版本 · {environmentName || environment}（{environment}）
                 </h3>
-                <span className="inline-flex items-center gap-1 rounded-full border border-divider-accent/40 bg-components-badge-bg-blue-light-soft px-2.5 py-0.5 text-[11px] font-medium text-text-accent">
+                <span
+                  title="只读诊断边界：禁止修改订单、配置、重算或重启业务服务"
+                  className="inline-flex items-center gap-1 rounded-full border border-divider-accent/40 bg-components-badge-bg-blue-light-soft px-2.5 py-0.5 text-[11px] font-medium text-text-accent"
+                >
                   <span aria-hidden="true" className="i-ri-shield-check-line size-3" />
                   <span>business_mutations: {overview?.business_mutations || 'disabled'}</span>
                 </span>
@@ -348,7 +380,7 @@ export default function EnvironmentReleasesPanel({
           </Button>
         </div>
 
-        <div className="grid gap-3 p-6 sm:grid-cols-3">
+        <div className="grid gap-3 p-5 sm:grid-cols-3">
           <div className="rounded-xl border border-divider-subtle bg-background-section-burn/55 px-4 py-3">
             <div className="text-[11px] text-text-tertiary">线上当前版本</div>
             <div className="mt-1 font-mono system-sm-semibold break-all text-text-primary">
@@ -379,7 +411,27 @@ export default function EnvironmentReleasesPanel({
             </div>
           </div>
           <div className="rounded-xl border border-divider-subtle bg-background-section-burn/55 px-4 py-3">
-            <div className="text-[11px] text-text-tertiary">公网 HTTPS 入口</div>
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-[11px] text-text-tertiary">公网 HTTPS 入口</div>
+              {overview?.gateway_url && (
+                <button
+                  type="button"
+                  aria-label={`复制 ${overview.gateway_url}`}
+                  onClick={() => copyGatewayUrl(overview.gateway_url)}
+                  className={`inline-flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+                    gatewayCopied
+                      ? 'bg-components-badge-bg-green-soft text-text-success'
+                      : 'text-text-tertiary hover:bg-components-panel-bg hover:text-text-primary'
+                  }`}
+                >
+                  <span
+                    aria-hidden="true"
+                    className={`size-3 ${gatewayCopied ? 'i-ri-check-line' : 'i-ri-file-copy-line'}`}
+                  />
+                  <span>{gatewayCopied ? '已复制' : '复制'}</span>
+                </button>
+              )}
+            </div>
             <div className="mt-1 truncate font-mono text-xs text-text-secondary">
               {overview?.gateway_url || '—'}
             </div>
@@ -430,8 +482,8 @@ export default function EnvironmentReleasesPanel({
       ) : (
         <div className="grid gap-5 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
           {/* 无损滚动升级面板 */}
-          <section className="flex flex-col justify-between gap-4 rounded-2xl border border-components-panel-border bg-components-panel-bg p-6 shadow-xs">
-            <div className="space-y-4">
+          <section className="flex flex-col justify-between gap-4 rounded-2xl border border-components-panel-border bg-components-panel-bg p-5 shadow-xs">
+            <div className="space-y-3.5">
               <div className="flex items-start gap-3">
                 <span
                   aria-hidden="true"
@@ -450,35 +502,198 @@ export default function EnvironmentReleasesPanel({
               </div>
 
               <div className="space-y-3">
-                <label className="block space-y-1.5">
-                  <span className="system-xs-medium text-text-secondary">目标官方正式版本</span>
-                  <div className="relative">
-                    <select
-                      aria-label="目标官方正式版本"
-                      className="h-10 w-full appearance-none rounded-xl border border-divider-regular bg-components-input-bg-normal pr-9 pl-3 text-xs text-text-primary focus:border-state-accent-solid focus:outline-hidden"
-                      disabled={busy || releases.length === 0}
-                      value={selectedTag}
-                      onChange={(e) => {
-                        setSelectedTag(e.target.value)
-                        setConfirmUpgrade(false)
-                      }}
-                    >
-                      {releases.length === 0 && <option value="">等待同步官方标签目录…</option>}
-                      {releases.map((item) => (
-                        <option key={item.tag} value={item.tag}>
-                          {item.tag}（{item.full_version}）— {item.summary || '正式发布版'}
-                        </option>
-                      ))}
-                    </select>
-                    <span
-                      aria-hidden="true"
-                      className="pointer-events-none absolute top-1/2 right-3 i-ri-arrow-down-s-line size-4 -translate-y-1/2 text-text-tertiary"
-                    />
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="system-xs-medium text-text-secondary">目标官方正式版本</span>
+                    {releases.length > 0 && (
+                      <span className="text-[11px] text-text-tertiary tabular-nums">
+                        共 {releases.length} 个正式版
+                      </span>
+                    )}
                   </div>
-                </label>
+
+                  <Popover
+                    open={releasePickerOpen}
+                    onOpenChange={(nextOpen) => {
+                      setReleasePickerOpen(nextOpen)
+                      if (!nextOpen) setReleaseQuery('')
+                    }}
+                  >
+                    <PopoverTrigger
+                      role="combobox"
+                      aria-label="目标官方正式版本"
+                      aria-expanded={releasePickerOpen}
+                      aria-haspopup="listbox"
+                      aria-controls="aiops-release-picker-listbox"
+                      disabled={busy || releases.length === 0}
+                      className="flex h-10 w-full cursor-pointer items-center justify-between gap-2.5 rounded-xl border border-divider-regular bg-components-input-bg-normal px-3 text-left text-xs text-text-primary transition-colors hover:border-divider-deep focus-visible:border-state-accent-solid focus-visible:ring-2 focus-visible:ring-state-accent-solid/25 focus-visible:outline-hidden disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {selectedRelease ? (
+                        <span className="flex min-w-0 flex-1 items-center gap-2">
+                          <span className="shrink-0 font-mono text-xs font-semibold text-text-primary">
+                            {selectedRelease.tag}
+                          </span>
+                          {overview?.latest_release?.tag === selectedRelease.tag && (
+                            <span className="shrink-0 rounded-full bg-components-badge-bg-blue-light-soft px-1.5 py-0.5 text-[10px] font-medium text-text-accent">
+                              最新
+                            </span>
+                          )}
+                          {overview?.current_version === selectedRelease.full_version && (
+                            <span className="shrink-0 rounded-full bg-components-badge-bg-green-soft px-1.5 py-0.5 text-[10px] font-medium text-text-success">
+                              当前线上
+                            </span>
+                          )}
+                          <span className="min-w-0 truncate text-text-tertiary">
+                            {selectedRelease.summary || selectedRelease.full_version}
+                          </span>
+                        </span>
+                      ) : (
+                        <span className="text-text-quaternary">等待同步官方标签目录…</span>
+                      )}
+                      <span
+                        aria-hidden="true"
+                        className={`i-ri-arrow-down-s-line size-4 shrink-0 text-text-tertiary transition-transform ${
+                          releasePickerOpen ? 'rotate-180 text-text-accent' : ''
+                        }`}
+                      />
+                    </PopoverTrigger>
+
+                    <PopoverContent
+                      placement="bottom-start"
+                      sideOffset={6}
+                      className="w-(--anchor-width) max-w-[calc(100vw-2rem)] overflow-hidden p-0! shadow-xl"
+                    >
+                      <div className="border-b border-divider-subtle bg-background-section-burn/65 p-2.5">
+                        {releases.length > 5 ? (
+                          <div className="relative">
+                            <span
+                              aria-hidden="true"
+                              className="pointer-events-none absolute top-1/2 left-2.5 i-ri-search-line size-3.5 -translate-y-1/2 text-text-tertiary"
+                            />
+                            <input
+                              type="search"
+                              aria-label="搜索官方正式版本"
+                              placeholder="搜索版本号（如 v1.43.20）、SHA 或更新说明…"
+                              value={releaseQuery}
+                              onChange={(e) => setReleaseQuery(e.target.value)}
+                              className="h-8 w-full rounded-lg border border-divider-subtle bg-components-panel-bg pr-7 pl-8 text-xs text-text-primary placeholder:text-text-quaternary focus:border-state-accent-solid focus:outline-hidden"
+                            />
+                            {releaseQuery && (
+                              <button
+                                type="button"
+                                aria-label="清空版本搜索"
+                                onClick={() => setReleaseQuery('')}
+                                className="absolute top-1/2 right-2 -translate-y-1/2 cursor-pointer text-text-tertiary hover:text-text-primary"
+                              >
+                                <span aria-hidden="true" className="i-ri-close-line size-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="px-1 text-[11px] font-medium text-text-tertiary">
+                            选择目标官方正式版（共 {releases.length} 个）
+                          </div>
+                        )}
+                      </div>
+
+                      <div
+                        id="aiops-release-picker-listbox"
+                        role="listbox"
+                        aria-label="官方正式版本列表"
+                        className="max-h-72 space-y-1 overflow-y-auto p-1.5"
+                      >
+                        {filteredReleases.length === 0 ? (
+                          <p className="py-6 text-center text-xs text-text-tertiary">
+                            无匹配的官方正式版本
+                          </p>
+                        ) : (
+                          filteredReleases.map((item) => {
+                            const isSelected = selectedRelease?.tag === item.tag
+                            const isLatest = overview?.latest_release?.tag === item.tag
+                            const isCurrent = overview?.current_version === item.full_version
+                            return (
+                              <button
+                                key={item.tag}
+                                type="button"
+                                role="option"
+                                aria-selected={isSelected}
+                                onClick={() => {
+                                  setSelectedTag(item.tag)
+                                  setConfirmUpgrade(false)
+                                  setReleasePickerOpen(false)
+                                  setReleaseQuery('')
+                                }}
+                                className={`flex w-full cursor-pointer items-start justify-between gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors ${
+                                  isSelected
+                                    ? 'border-state-accent-solid/50 bg-state-accent-hover/75'
+                                    : 'border-transparent hover:bg-background-section-burn/80'
+                                }`}
+                              >
+                                <div className="min-w-0 flex-1 space-y-1">
+                                  <div className="flex flex-wrap items-center gap-1.5">
+                                    <span
+                                      className={`font-mono text-xs font-semibold ${
+                                        isSelected ? 'text-text-accent' : 'text-text-primary'
+                                      }`}
+                                    >
+                                      {item.tag}
+                                    </span>
+                                    <span className="rounded bg-background-section-burn px-1.5 py-0.5 font-mono text-[10px] text-text-tertiary">
+                                      {item.short_sha || item.full_version}
+                                    </span>
+                                    {isCurrent && (
+                                      <span className="rounded-full bg-components-badge-bg-green-soft px-1.5 py-0.5 text-[10px] font-medium text-text-success">
+                                        当前运行
+                                      </span>
+                                    )}
+                                    {isLatest && (
+                                      <span className="rounded-full bg-components-badge-bg-blue-light-soft px-1.5 py-0.5 text-[10px] font-medium text-text-accent">
+                                        最新
+                                      </span>
+                                    )}
+                                    {item.ingress_diff.changed && (
+                                      <span className="rounded-full bg-components-badge-bg-orange-soft px-1.5 py-0.5 text-[10px] font-medium text-text-warning">
+                                        含 Nginx 更新
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p className="line-clamp-2 text-[11px] leading-snug text-text-secondary">
+                                    {item.summary || '正式发布版'}
+                                  </p>
+                                </div>
+                                {isSelected && (
+                                  <span
+                                    aria-hidden="true"
+                                    className="mt-0.5 i-ri-check-line size-4 shrink-0 text-text-accent"
+                                  />
+                                )}
+                              </button>
+                            )
+                          })
+                        )}
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+
+                  {selectedRelease && (
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-background-section-burn/45 px-3 py-1.5 text-[11px] text-text-secondary">
+                      <span className="min-w-0 flex-1 break-all">
+                        <strong className="font-mono text-text-primary">
+                          {selectedRelease.full_version}
+                        </strong>
+                        {selectedRelease.summary ? ` — ${selectedRelease.summary}` : ''}
+                      </span>
+                      {selectedRelease.released_at && (
+                        <span className="shrink-0 text-text-tertiary tabular-nums">
+                          {selectedRelease.released_at.slice(0, 10)}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
 
                 {selectedRelease && (
-                  <div className="space-y-3 rounded-xl border border-divider-subtle bg-background-section-burn/55 p-4 text-xs">
+                  <div className="space-y-3 rounded-xl border border-divider-subtle bg-background-section-burn/55 p-3.5 text-xs">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <span className="font-medium text-text-primary">
                         Nginx 用户入口变更检测（自动同步 · nginx -t 兜底）
@@ -596,7 +811,7 @@ export default function EnvironmentReleasesPanel({
           </section>
 
           {/* 一键安全回滚面板 */}
-          <section className="flex flex-col justify-between gap-4 rounded-2xl border border-components-panel-border bg-components-panel-bg p-6 shadow-xs">
+          <section className="flex flex-col justify-between gap-4 rounded-2xl border border-components-panel-border bg-components-panel-bg p-5 shadow-xs">
             <div className="space-y-4">
               <div className="flex items-start gap-3">
                 <span
