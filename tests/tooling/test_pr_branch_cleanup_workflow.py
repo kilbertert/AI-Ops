@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import subprocess
 import textwrap
 from pathlib import Path
@@ -157,4 +156,3 @@ def test_safe_against_shell_characters_in_branch_name(tmp_path: Path) -> None:
     assert proc.returncode == 0, proc.stderr
     assert not pwn.exists()
     assert any("-X DELETE" in c for c in calls)
-    del os.environ  # sanity no-op
