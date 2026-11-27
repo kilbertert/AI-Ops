@@ -35,6 +35,7 @@ const data = {
 }
 
 afterEach(() => {
+  window.sessionStorage.clear()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
@@ -2110,4 +2111,173 @@ test('5 步自助开通向导：双模式主机引导、二次确认受限库修
     'publish_environment',
     'post_publish_smoke',
   ])
+})
+
+function makeUnsignedJwt(claims: Record<string, unknown>): string {
+  const b64 = (obj: unknown) =>
+    btoa(JSON.stringify(obj)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  return `${b64({ alg: 'none', typ: 'JWT' })}.${b64(claims)}.sig`
+}
+
+it('脱敏示例占位符与 Step 4 前置拦截 system(-1)/跨租户 JWT', async () => {
+  const wizardActions: string[] = []
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_input: unknown, init?: { body?: string }) => {
+      const body = JSON.parse(init?.body || '{}')
+      if (body.action === 'environment-drafts') {
+        return Response.json({ registry_revision: 1, can_create: true, effective: [], drafts: [] })
+      }
+      if (body.action === 'environment-wizard') {
+        wizardActions.push(body.wizard_action)
+        if (body.wizard_action === 'discover') {
+          return Response.json({
+            environment: 'acme',
+            ready: true,
+            state: 'passed',
+            host: { hostname: 'acme-gw', python_minor: '3.12', timezone: 'Asia/Shanghai', nginx_flavor: 'baota', nginx_extension_dir: '/tmp/ext' },
+            checks: [{ id: 'ok', category: 'mysql', state: 'passed', summary: '全部通过' }],
+            db_remediation_plan: { has_auto_fixable_db_gaps: false, remediation_ids: [], sql_statements: [], confirmation_digest: '' },
+            discovered: {
+              tenants: [{ id: '1000000000000000001', name: '示例租户' }],
+              healthy_tsdata_url: 'http://127.0.0.1:30888',
+              sample_candidates: {
+                orders: [{ order_no: 'ORD1' }],
+                offline_devices: [{ device_id: 'DEV1' }],
+                consumer_orders: [{ order_no: 'ORD1' }],
+              },
+            },
+          })
+        }
+      }
+      return Response.json({})
+    }),
+  )
+
+  const screen = await render(<EnvironmentManagement />)
+  await screen.getByRole('button', { name: '5 步自助开通向导' }).click()
+  const ipBox = screen.getByRole('textbox', { name: '服务器公网 IP' })
+  await expect.element(ipBox).toHaveAttribute('placeholder', '如：203.0.113.10')
+  expect(document.body.innerHTML).not.toContain('8.148.223.139')
+  expect(document.body.innerHTML).not.toContain('juxichongdian')
+
+  await screen.getByRole('textbox', { name: '环境代号' }).fill('acme')
+  await screen.getByRole('textbox', { name: '客户 API 域名' }).fill('api.customer.example.com')
+  await screen.getByRole('button', { name: /2\. 体检与修复/ }).click()
+  await screen.getByRole('button', { name: '运行自动环境探测与体检' }).click()
+  await screen.getByRole('button', { name: /4\. 知识与自验/ }).click()
+
+  await screen.getByLabelText('临时管家令牌').fill(makeUnsignedJwt({ username: 'system', tenant_id: '-1' }))
+  await screen.getByRole('button', { name: '一键执行三能力自验（免写 JSON）' }).click()
+  await expect.element(screen.getByRole('alert')).toHaveTextContent(/tenant_id=-1/)
+
+  await screen.getByLabelText('临时管家令牌').fill(makeUnsignedJwt({ username: 'other', tenant_id: '999999' }))
+  await screen.getByRole('button', { name: '一键执行三能力自验（免写 JSON）' }).click()
+  await expect.element(screen.getByRole('alert')).toHaveTextContent(/所属租户为 999999/)
+
+  expect(wizardActions).not.toContain('self_validate')
+})
+
+it('刷新后按环境代号自动恢复服务端进度，并在 Step 5 支持可选全量 4 项公网终验', async () => {
+  const wizardCalls: Array<{ action: string; payload: Record<string, unknown> }> = []
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_input: unknown, init?: { body?: string }) => {
+      const body = JSON.parse(init?.body || '{}')
+      if (body.action === 'environment-drafts') {
+        return Response.json({ registry_revision: 29, can_create: true, effective: [], drafts: [] })
+      }
+      if (body.action === 'environment-wizard') {
+        wizardCalls.push({ action: body.wizard_action, payload: body.wizard_payload })
+        if (body.wizard_action === 'host_status') {
+          return Response.json({
+            environment: 'acme',
+            enrolled: true,
+            host: {
+              environment: 'acme',
+              host_alias: 'aiops-cust-acme',
+              address: '203.0.113.10',
+              ssh_port: 22,
+              ssh_user: 'root',
+              host_fingerprint_sha256: 'SHA256:MOCKFP',
+              enrollment_mode: 'ephemeral_password',
+              status: 'verified',
+              hostname: 'acme-gw',
+              python_minor: '3.12',
+              service_user_present: true,
+              venv_ready: true,
+              nginx_flavor: 'baota',
+              rotate_root_password_recommended: true,
+            },
+          })
+        }
+        if (body.wizard_action === 'infra_status' && body.wizard_payload.action === 'infra_provision') {
+          return Response.json({
+            job_id: 'wizjob_0123456789abcdef01234567',
+            state: 'completed',
+            provisioned: true,
+            passed: true,
+            consumer_kb_id: 'kb-con-acme',
+            operator_kb_id: 'kb-op-acme',
+            request: {
+              customer_name: '示例客户',
+              api_domain: 'api.customer.example.com',
+              tenant_id: '1000000000000000001',
+              tenant_name: '示例租户',
+            },
+            steps: [],
+          })
+        }
+        if (body.wizard_action === 'infra_status' && body.wizard_payload.action === 'publish_environment') {
+          return Response.json({
+            job_id: 'wizjob_fedcba9876543210fedcba98',
+            state: 'completed',
+            passed: true,
+            published: true,
+            result: { published: true, tenant_id: '1000000000000000001', gateway_url: 'https://api.customer.example.com', registry_revision: 29 },
+            steps: [{ step: 'enable_registry', state: 'passed' }],
+          })
+        }
+        if (body.wizard_action === 'post_publish_smoke') {
+          return Response.json({
+            gateway_url: 'https://api.customer.example.com',
+            tenant_id: '1000000000000000001',
+            passed: true,
+            operator_session_revoked: true,
+            checks: [
+              { id: 'public-https-anon-rejected', passed: true, actual_http: 401 },
+              { id: 'public-https-customer-route-intact', passed: true, actual_http: 200 },
+              { id: 'public-https-consumer-qa', passed: true, status: 'completed', qa_id: 'qa_c1' },
+              { id: 'public-https-operator-qa', passed: true, status: 'completed', qa_id: 'qa_o1' },
+            ],
+            business_accuracy: 'unconfirmed',
+          })
+        }
+      }
+      return Response.json({})
+    }),
+  )
+
+  // 模拟浏览器刷新前的非敏感草稿（绝无口令/令牌）
+  window.sessionStorage.setItem(
+    'aiops-onboarding-wizard-draft:v1',
+    JSON.stringify({ step: 2, envId: 'acme', customerName: '示例客户', apiDomain: 'api.customer.example.com' }),
+  )
+
+  const screen = await render(<EnvironmentManagement />)
+  await screen.getByRole('button', { name: '5 步自助开通向导' }).click()
+  await expect.element(screen.getByText(/已从服务端恢复环境 acme 的当前开通进度（第 5 步）/)).toBeVisible()
+
+  await screen.getByRole('textbox', { name: '发布后 C 端测试手机号' }).fill('13900009999')
+  await screen.getByLabelText('发布后临时管家令牌').fill(makeUnsignedJwt({ username: 'op1', tenant_id: '1000000000000000001' }))
+  await screen.getByRole('button', { name: '执行公网正式 HTTPS 4 项终验' }).click()
+
+  await expect.element(screen.getByText('全量 4 项通过')).toBeVisible()
+  await expect.element(screen.getByText(/临时管家令牌自动吊销：已吊销/)).toBeVisible()
+  const smokeCall = wizardCalls.find((c) => c.action === 'post_publish_smoke')
+  expect(smokeCall?.payload.consumer_phone).toBe('13900009999')
+  expect(smokeCall?.payload.consumer_code).toBe('8888')
+  const storedDraft = window.sessionStorage.getItem('aiops-onboarding-wizard-draft:v1') || ''
+  expect(storedDraft).not.toContain('13900009999')
+  expect(storedDraft).not.toContain('tenant_id')
 })
