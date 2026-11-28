@@ -87,7 +87,6 @@ LAYOUT = {
         frozenset(
             [
                 "conftest.py",
-                "operator_native_preview.mjs",
                 "operator_support.py",
                 "test_bridge_knowledge_open.py",
                 "test_cd_deploy_scripts.py",

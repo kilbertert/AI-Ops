@@ -154,7 +154,7 @@ def test_bridge_install_waits_for_new_routes_or_restores_all_files(tmp_path, fai
             ROOT / "services/dify-console-bridge/dify_console_bridge" / f"{name}.py",
             bridge_pkg / f"{name}.py",
         )
-    for name in ("dify-publish-button.js", "dify-console-publish.conf"):
+    for name in ("dify-console-publish.conf",):
         shutil.copyfile(ROOT / "ops/dify-console-bridge" / name, bundle / name)
     (bundle / "REVISION").write_text("test-revision\n")
     (bundle / "SHA256SUMS").write_text(
@@ -170,8 +170,7 @@ def test_bridge_install_waits_for_new_routes_or_restores_all_files(tmp_path, fai
     code.mkdir()
     (code / "old.py").write_text("old package\n")
     bridge_installed = tmp_path / "installed_bridge"
-    js, snippet, nginx = (tmp_path / n for n in ("button.js", "snippet.conf", "nginx"))
-    js.write_text("old js\n")
+    snippet, nginx = (tmp_path / n for n in ("snippet.conf", "nginx"))
     snippet.write_text("old snippet\n")
     nginx.write_text(
         '#!/bin/sh\nif [ "$*" = "-s reload" ] && [ -f "$FAIL_RELOAD" ]; then rm "$FAIL_RELOAD"; exit 1; fi\n'
@@ -200,7 +199,6 @@ def test_bridge_install_waits_for_new_routes_or_restores_all_files(tmp_path, fai
     for before, after in {
         "/opt/aiops-console-bridge/aiops_diagnostics": code,
         "/opt/aiops-console-bridge/dify_console_bridge": bridge_installed,
-        "/srv/aiops-console-assets/dify-publish-button.js": js,
         "/www/server/panel/vhost/nginx/snippets/dify-console-publish.conf": snippet,
         "/www/server/nginx/sbin/nginx": nginx,
         "/etc/systemd/system/aiops-dify-console-bridge.service": unit,
@@ -223,11 +221,9 @@ def test_bridge_install_waits_for_new_routes_or_restores_all_files(tmp_path, fai
         assert unit.read_text() == "ExecStart=python -m aiops_diagnostics.dify.dify_console_publish\n"
         assert list(code.iterdir()) == [code / "old.py"]
         assert not bridge_installed.exists()
-        assert js.read_text() == "old js\n"
         assert snippet.read_text() == "old snippet\n"
     else:
         assert " -m dify_console_bridge\n" in unit.read_text()
         assert (bridge_installed / "bridge.py").read_bytes() == (bridge_pkg / "bridge.py").read_bytes()
-        assert js.read_bytes() == (bundle / "dify-publish-button.js").read_bytes()
         assert snippet.read_bytes() == (bundle / "dify-console-publish.conf").read_bytes()
     assert (tmp_path / "backup/aiops_diagnostics/old.py").read_text() == "old package\n"

@@ -5,7 +5,7 @@
 ## 1. 目录结构
 
 - `1.17.1/*.patch`：对上游 `langgenius/dify@1.17.1` 前端现有文件的增量补丁（由 `build-web-image.sh` 按 `--fuzz=0` + SHA-256 严格校验后应用）。
-- `1.17.1/aiops-*.tsx` / `1.17.1/aiops-management.ts` / `1.17.1/aiops-liquid-glass.*` / `1.17.1/ExternalKnowledgeIdPicker.tsx`：AI-Ops 自研管理页与工作台组件（`/aiops/environments`、`/aiops/management` 等），在构建时直接拷入源码树编译。
+- `1.17.1/aiops-*.tsx` / `1.17.1/aiops-management.ts` / `1.17.1/aiops-liquid-glass.*` / `1.17.1/ExternalKnowledgeIdPicker.tsx`：AI-Ops 自研管理页与控制台内嵌组件（`/aiops/environments`、`/aiops/management`、`/datasets` 页 `AiopsKnowledgeOpenCard` 等；原 Nginx `sub_filter` 注入脚本已按 ADR-0366 退役）。
 - `1.17.1/*.spec.tsx`：基于真实 Chromium（Vitest Browser）的前端组件回归测试。
 - `build-web-image.sh`：核心镜像构建脚本（拉取钉死版本源码 → 校验上游 22 个文件 SHA-256 → 打补丁 → `pnpm build --webpack` 构建独立可运行 OCI 镜像）。
 - `publish-web-image.sh`：CI / 发布标准入口——校验提交归属 `origin/main`、构建、非联网冒烟校验、推送至公司阿里云 ACR（`AIOPS_DIFY_WEB_IMAGE_REPO`）并解析输出不可变 `@sha256` 元数据 `dify-web-image.json`。

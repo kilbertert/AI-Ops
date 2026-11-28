@@ -157,24 +157,18 @@ Docker Hub 在 36 **不可达**（`registry-1.docker.io` 连接被重置）。�
 
 内部容器入口已收到回环 10018（发布桥部署层）。
 
-### 入口那一层（#776）
+### 入口那一层（#776 / ADR-0366）
 
 ```
 浏览器 ──► https://dify.ranlei.work（dify-console-TLS.conf，443，LE 证书）
              └─► 127.0.0.1:10008（dify-console-10008.conf）
-                   ├─ /                          ──► 127.0.0.1:10018（Dify 自己的 nginx）
-                   ├─ /__aiops/publish-button.js ← 注入脚本
-                   └─ /__aiops/publish           ──► 127.0.0.1:10118（桥）
+                   ├─ /          ──► 127.0.0.1:10018（Dify 自己的 nginx / web 直编扩展）
+                   └─ /__aiops/* ──► 127.0.0.1:10118（桥）
 ```
 
-**TLS 那一层反代到 10008 而不是 10018**：注入、按钮脚本与发布桥都在 10008 那一层，
-指到 10018 会把它们整个绕过。**域名选灰云（不经 Cloudflare）**，理由是这个入口将来要承接
-公司口令，橙云会让第三方看到它；代价是源站 IP 暴露（而 10008 本来就已经裸在公网上）。
-因此 36 上那张 `*.ranlei.work` 的 CloudFlare Origin CA 证书**用不上**，改签公开 CA 的 LE 证书。
+**TLS 那一层反代到 10008 而不是 10018**：登录代理与发布桥 `/__aiops/*` 转发都在 10008 那一层（原 Nginx `sub_filter` 脚本注入已于 ADR-0366 全部退役，前端定制统一维护在 `deploy/dify-36/web-patches/`），指到 10018 会绕过登录与桥鉴权。**域名选灰云（不经 Cloudflare）**，理由是这个入口要承接公司口令。
 
-**切换 https 会改 cookie 名**：Dify 在 `is_secure() && COOKIE_DOMAIN 为空` 时加 `__Host-`
-前缀。读 cookie 的地方（尤其**注入的按钮脚本**）必须两种前缀都试 —— 只读裸名会静默拿到
-空 CSRF、桥 401 而界面看不出原因。详见 `ops/dify-console-bridge/README.md` 的「四处容易踩空」第 4 条。
+**切换 https 会改 cookie 名**：Dify 在 `is_secure() && COOKIE_DOMAIN 为空` 时加 `__Host-` 前缀，读 cookie 的直编组件（如 `aiops-knowledge-open.tsx`）与桥侧均同时兼容两种前缀。
 
 ### 观测能力（一处补上的缺口）
 

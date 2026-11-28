@@ -1,24 +1,13 @@
-"""知识库入口的 nginx 接线（#985 / PRD #981）。
-
-三处改动各自都能"看着配了其实没生效"，所以逐处钉住：
-
-1. **脚本必须真的被注入** —— `sub_filter` 换的是 `</body>`，少一个字符就静默不注入，
-   而页面上看不出任何异常（发布按钮也有同样的前提）。
-2. **脚本必须从我们这里出** —— `alias` 指错就是一个 404 的 `<script>`，浏览器把它当
-   空脚本执行，页面照常，入口永远不出现。
-3. **转发必须把会话带下去** —— 少了 `Cookie`，桥解析不出身份，运营看到的是"请先登录"，
-   而他明明登录着。
-
-第 3 条尤其容易写成"照抄发布那条"：那条把 `Content-Type` 定死成 JSON、body 限 4k，
-而知识库入口是浏览器的顶层 GET —— 照抄会让它在浏览器里 4xx。
-"""
+"""知识库入口与退役 Nginx sub_filter 注入的接线判据（#985 / PRD #981 / ADR-0366）。"""
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
 
-OPS = Path(__file__).parents[2] / "ops" / "dify-console-bridge"
+ROOT = Path(__file__).parents[2]
+OPS = ROOT / "ops" / "dify-console-bridge"
+WEB_PATCHES = ROOT / "deploy" / "dify-36" / "web-patches" / "1.17.1"
 
 
 def _console() -> str:
@@ -29,25 +18,27 @@ def _snippets() -> str:
     return (OPS / "dify-console-publish.conf").read_text(encoding="utf-8")
 
 
-def test_the_script_is_injected_next_to_the_publish_button() -> None:
-    """注入行里必须同时有两个 `<script>`，且都换在 `</body>` 上。"""
+def test_nginx_subfilter_js_injection_is_retired() -> None:
+    """确认 10008 不再通过 Nginx sub_filter 或 `/__aiops/*.js` 注入脚本（ADR-0366）。"""
     text = _console()
-    injected = [line for line in text.splitlines() if "sub_filter '</body>'" in line]
-    assert len(injected) == 1, "应当只有一条 `</body>` 注入行"
-    line = injected[0]
-    assert "/__aiops/publish-button.js" in line
-    assert "/__aiops/dify-knowledge-open.js" in line
-    assert line.rstrip().endswith("</body>';")
+    active_lines = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+    assert "sub_filter" not in active_lines
+    assert "/__aiops/publish-button.js" not in active_lines
+    assert "/__aiops/dify-knowledge-open.js" not in active_lines
 
 
-def test_the_script_is_served_from_our_own_path() -> None:
-    text = _console()
-    block = re.search(r"location = /__aiops/dify-knowledge-open\.js \{(.*?)\}", text, flags=re.S)
-    assert block, "缺少 /__aiops/dify-knowledge-open.js 的 alias"
-    body = block.group(1)
-    assert "alias /srv/aiops-console-assets/dify-knowledge-open.js" in body
-    assert "application/javascript" in body
-    assert "no-store" in body
+def test_knowledge_open_card_is_native_react_component_without_secrets() -> None:
+    """RAGFlow 入口已迁入正式 React 组件 `aiops-knowledge-open.tsx` 并挂载到根布局。"""
+    src = (WEB_PATCHES / "aiops-knowledge-open.tsx").read_text(encoding="utf-8")
+    assert "pathname === '/datasets' || pathname.startsWith('/datasets/')" in src
+    assert "localStorage" not in src
+    assert "setInterval" not in src
+    assert "'/__aiops/knowledge-open'" in src
+    assert "BUILD_KEY" not in src and "TRIAL_KEY" not in src
+
+    patch_txt = (WEB_PATCHES / "18-liquid-glass-theme.patch").read_text(encoding="utf-8")
+    assert "AiopsKnowledgeOpenCard" in patch_txt
+    assert "+        <AiopsKnowledgeOpenCard />" in patch_txt
 
 
 def test_the_console_forwards_the_knowledge_route_to_the_bridge() -> None:

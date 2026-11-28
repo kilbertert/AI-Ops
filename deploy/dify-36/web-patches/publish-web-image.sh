@@ -124,9 +124,9 @@ export DOCKER_CONFIG="$docker_cfg"
 
 DIFY_WEB_PATCHED_IMAGE="$primary_ref" DIFY_WEB_WORK="$work_dir" bash "$SCRIPT_DIR/build-web-image.sh"
 
-# 非联网冒烟校验：确认 standalone server.js、入口脚本、Liquid Glass 与 OCI 发版界面已打入产物
+# 非联网冒烟校验：确认 standalone server.js、入口脚本、Liquid Glass、RAGFlow 入口卡与 OCI 发版界面已打入产物
 docker run --rm --network none --entrypoint sh "$primary_ref" -c \
-  'test -f /app/targets/next/web/server.js && test -x /app/entrypoint.sh && grep -rq "aiops-liquid-glass" /app/targets/next && grep -rq "待构建镜像" /app/targets/next'
+  'test -f /app/targets/next/web/server.js && test -x /app/entrypoint.sh && grep -rq "aiops-liquid-glass" /app/targets/next && grep -rq "aiops-kb-open-card" /app/targets/next && grep -rq "待构建镜像" /app/targets/next'
 
 printf '%s' "$ACR_PASS" | docker login "$registry_host" --username "$ACR_USER" --password-stdin
 

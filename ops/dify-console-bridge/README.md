@@ -3,22 +3,16 @@
 受限Dify服务API入口、正式用途及合并制品安装与恢复见[操作手册](../../docs/agents/shared-dify-https-fallback.md)。
 它不提供控制台或内部管理服务；是否已部署以交付回执为准。
 
-**这是什么**：在 Dify 控制台的编排页注入一颗按钮，运营点它就把**当前改好的内容**
-冻结成一个已发布的线上版本。**不用 SSH、不用敲命令。**
+**这是什么**：为 Dify 控制台提供同源 `/__aiops/*` HTTP 发布桥服务（`publish`/`retract`/`restore`/`versions`/`trial`/`operator-preview`/`manage`/`knowledge-open`）。前端界面与按钮组件统一位于 [`deploy/dify-36/web-patches/`](../../deploy/dify-36/web-patches/README.md)，不再使用 Nginx `sub_filter` 运行时 JS 注入（ADR-0366）。
 
-决定的论证在 **ADR-0021** 与 **ADR-0338**；后端桥独立位于 `services/dify-console-bridge/dify_console_bridge/`。
+决定的论证在 **ADR-0021**、**ADR-0338** 与 **ADR-0366**；后端桥独立位于 `services/dify-console-bridge/dify_console_bridge/`。
 本目录只是**部署资产**。
 
-管家原生预览由同包的 `operator-native-preview.js` 接线，打包时拼入原注入脚本，无需改 Dify
-前端镜像。更新后的 Python 桥及两条 `/__aiops/operator-preview` 路由必须同版安装；
-其 SSE 禁止代理缓冲，200秒代理超时覆盖180秒预览上限。详见
-[原生预览手册](../../docs/agents/operator-cpms/native-preview.md)。
+管家原生预览与受管发布条已直编进 `deploy/dify-36/web-patches/`（无需 Nginx 注入 JS）。更新后的 Python 桥及 `/__aiops/operator-preview` 路由需与前端镜像保持兼容；其 SSE 禁止代理缓冲，200秒代理超时覆盖180秒预览上限。详见[原生预览手册](../../docs/agents/operator-cpms/native-preview.md)。
 
 ## M3 部署包与恢复
 
-Gateway 的 CD 不更新本桥。撤回、恢复和版本列表要求 **Python 桥、JS、nginx snippet**
-同版；只更新 Gateway 不能交付运营入口。`build-bundle.sh` 从确定 Git 修订取这三部分及
-桥的全部标准库依赖，写入 `REVISION`、`SHA256SUMS`，不携带 env 或凭据。
+Gateway 的 CD 不更新本桥。撤回、恢复和版本列表要求 **Python 桥与 nginx snippet** 同版。`build-bundle.sh` 从确定 Git 修订打包这两部分及桥的全部标准库依赖，写入 `REVISION`、`SHA256SUMS`，不携带 env 或凭据。
 
 ```bash
 # 开发机：只用已合并修订，输出目录为私有目录
@@ -41,7 +35,6 @@ systemctl stop aiops-dify-console-bridge.service
 rm -rf /opt/aiops-console-bridge/aiops_diagnostics /opt/aiops-console-bridge/dify_console_bridge
 cp -a <备份>/aiops_diagnostics /opt/aiops-console-bridge/aiops_diagnostics
 if [ -e <备份>/dify_console_bridge ]; then cp -a <备份>/dify_console_bridge /opt/aiops-console-bridge/dify_console_bridge; fi
-cp -a <备份>/dify-publish-button.js /srv/aiops-console-assets/dify-publish-button.js
 cp -a <备份>/dify-console-publish.conf /www/server/panel/vhost/nginx/snippets/dify-console-publish.conf
 cp -a <备份>/bridge.service /etc/systemd/system/aiops-dify-console-bridge.service
 systemctl daemon-reload
@@ -51,14 +44,13 @@ systemctl start aiops-dify-console-bridge.service
 
 以上是操作方法，不是生产启用授权；部署与运行配置的变更范围需单独写入私有变更单。
 
-## 四件东西，装在哪
+## 组件与安装位置
 
 | 文件 | 装到 | 作用 |
 |---|---|---|
 | `dify-console-TLS.conf` | `/www/server/panel/vhost/nginx/` (36) | **TLS 域名入口**（#776）：`dify.ranlei.work` 的 80 跳转 + 443，反代到 10008 |
-| `dify-console-10008.conf` | `/www/server/panel/vhost/nginx/` (36) | 10008 server 块：转发 Dify + 注入（TLS 入口的下游，也是回滚路径） |
-| `dify-console-publish.conf` | `/www/server/panel/vhost/nginx/snippets/` | 桥的同源转发（含 cookie 与 CSRF 头） |
-| `dify-publish-button.js` | `/srv/aiops-console-assets/` | 注入进页面的脚本。**不含任何凭据** |
+| `dify-console-10008.conf` | `/www/server/panel/vhost/nginx/` (36) | 10008 server 块：转发 Dify + 挂载桥与登录代理 snippet |
+| `dify-console-publish.conf` | `/www/server/panel/vhost/nginx/snippets/` | 桥的同源 `/__aiops/*` 转发（含 cookie 与 CSRF 头） |
 | `aiops-dify-console-bridge.service` | `/etc/systemd/system/` | 桥的服务单元（身份 `aiopsbridge`） |
 
 ## 拓扑
@@ -66,44 +58,18 @@ systemctl start aiops-dify-console-bridge.service
 ```
 浏览器 ──► https://dify.ranlei.work（dify-console-TLS.conf，443）
              └─► 127.0.0.1:10008（dify-console-10008.conf）
-                   ├─ /            ──► 127.0.0.1:10018（Dify 自己的 nginx）
-                   ├─ /__aiops/publish-button.js  ← 注入脚本从这里出
-                   └─ /__aiops/publish            ──► 127.0.0.1:10118（桥）
+                   ├─ /            ──► 127.0.0.1:10018（Dify 自己的 nginx / web 含直编扩展组件）
+                   └─ /__aiops/*   ──► 127.0.0.1:10118（桥）
 ```
 
-**TLS 那一层反代到 10008，不是 10018。** 注入、发布脚本与桥的三个 location 都在 10008
-那一层；指到 10018 会把它们整个绕过。10008 同时是本次变更的**回滚路径**（退役是另一件
-有观测依据的单独动作）。详见 `dify-console-TLS.conf` 顶部的注释。
+**TLS 那一层反代到 10008，不是 10018。** 登录收口与发布桥的 `/__aiops/*` 转发都在 10008 那一层；指到 10018 会把它们整个绕过。10008 同时是本次变更的**回滚路径**。
 
-**Dify 的发布端口必须收进回环**：`deploy/docker-compose.yaml` 里
-`127.0.0.1:${DIFY_EXPOSE_PORT:-10018}:80`。绑 `0.0.0.0` 会让 10018 成为绕过注入层的
-第二条路。
+**Dify 的发布端口必须收进回环**：`deploy/docker-compose.yaml` 里 `127.0.0.1:${DIFY_EXPOSE_PORT:-10018}:80`。
 
-## 四处**容易踩空**的地方（都是实测踩过的）
+## 关键注意点
 
-1. **CSRF 头必须转下去。** Dify 的 `/console/api/*` 除了 cookie 还要
-   `X-CSRF-Token`，少了它一律 401 `CSRF token is missing or invalid` ——
-   桥会把它误报成"会话失效"。桥和 nginx snippet 两处都要带。
-2. **注入脚本不能放在 `vhost/` 目录下。** 那两级目录是 `drw-------`（宝塔私有区），
-   nginx 的 worker **走不进去**，取脚本时 403。放 `/srv/aiops-console-assets/`。
-3. **`sub_filter` 要求上游不压缩。** 所以 `proxy_set_header Accept-Encoding ""` +
-   `gzip off`；少了这两行，替换**静默失败**（看着配了其实没注入）。
-   另外脚本里的符号全部带 `aiops` 前缀 —— 第一版直接叫 `publish`/`toast`，
-   与 Dify 自己的 bundle 撞名，报 `publish is not a function`。
-4. **⚠️ cookie 名随 scheme 变，读 cookie 必须两种前缀都试。** Dify 在
-   **https 且 `COOKIE_DOMAIN` 为空**时给控制台 cookie 加 `__Host-` 前缀
-   （`api/libs/token.py` 的 `is_secure() and _cookie_domain() is None`），http 下是裸名。
-   #776 把控制台收到 https 后名字就从 `csrf_token` 变成了 `__Host-csrf_token`。
-   - **桥侧已经兼容**（`console_session_from_headers` 同时识别两种，转发时按实际前缀回填）；
-   - **注入的按钮脚本也必须兼容**，否则 `aiopsReadCookie('csrf_token')` 读到空串 →
-     提交空 CSRF → 桥 401，而**界面上完全看不出原因**（按钮在、点了就失败）。
-   判据：在 https 控制台里 `document.cookie` 应含 `__Host-access_token` / `__Host-csrf_token`。
-   设计取舍：**用 `__Host-`，不设 `COOKIE_DOMAIN` 把它关掉** —— 前缀带来的隔离更强，
-   代价就是这一类读 cookie 的地方都得跟着改（v2 的登录代理也有同样的待办，见 #776 记录）。
-
-   附带一条同源的实测：**多层 `proxy_pass` 下 `sub_filter` 是逐层独立的**。TLS 那一层
-   反代到 10008 时，注入仍由 10008 负责；若将来把注入挪到外层，**必须同时删掉内层那份**，
-   否则页面里会出现两个 `/__aiops/publish-button.js`。验收时数它出现几次即可。
+1. **CSRF 头必须转下去。** Dify 的 `/console/api/*` 除了 cookie 还要 `X-CSRF-Token`，少了它一律 401 `CSRF token is missing or invalid`。桥和 nginx snippet 两处都要带。
+2. **⚠️ cookie 名随 scheme 变，读 cookie 必须两种前缀都试。** Dify 在 **https 且 `COOKIE_DOMAIN` 为空**时给控制台 cookie 加 `__Host-` 前缀（`api/libs/token.py`）。前端直编组件（如 `aiops-knowledge-open.tsx`）与桥侧 `console_session_from_headers` 均同时兼容 `__Host-csrf_token` 与 `csrf_token`。
 
 ## 桥读什么
 
