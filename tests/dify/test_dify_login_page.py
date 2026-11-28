@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -213,3 +215,12 @@ def test_native_logout_is_routed_to_login_binding_revocation():
     conf = PROXY_CONF.read_text()
     block = conf.split("location = /console/api/logout {", 1)[1].split("}", 1)[0]
     assert "proxy_pass http://127.0.0.1:10119;" in block
+
+
+def test_environment_picker_keyboard_keeps_navigation_separate_from_selection() -> None:
+    """运行实际登录页脚本，验证键盘浏览不会清空验证码或切换环境。"""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required to execute the login page keyboard regression")
+    script = Path(__file__).with_name("login_environment_keyboard.cjs")
+    subprocess.run([node, str(script), str(PAGE)], check=True, timeout=15)
