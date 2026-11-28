@@ -1,7 +1,7 @@
 # 已安装候选运行登记：交付与现场接续
 
 本事件接续 P4 [D39](../acceptance/environment-directory-qa-plan.md)与
-[ADR0300](../adr/0300-candidate-runtime-registration-task.md)。范围是已安装停用候选的
+[ADR0300](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0300-candidate-runtime-registration-task.md)。范围是已安装停用候选的
 工作区与双端应用运行登记，不包含正式激活或三业务准确性验收。
 
 ## 实现、反例与合并

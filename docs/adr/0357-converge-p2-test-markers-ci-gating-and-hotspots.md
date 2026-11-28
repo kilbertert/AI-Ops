@@ -5,7 +5,7 @@ Date: 2026-11-26
 
 ## Context
 
-在依据 [ADR-0356](0356-retire-historical-recon-evidence-tests.md) 退役 6 个历史 `#475–#480` 公司探查文档测试后，对其余 P2 候选测试项（M2/M3 工具测试、Nginx 配置测试与超大 `@pytest.mark.parametrize` 矩阵）进行了跨 `.github/workflows/ci.yml`、`tools/README.md`、`src/` 与 `docs/agents/` 的全仓依赖核查：
+在依据 [ADR-0356](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0356-retire-historical-recon-evidence-tests.md) 退役 6 个历史 `#475–#480` 公司探查文档测试后，对其余 P2 候选测试项（M2/M3 工具测试、Nginx 配置测试与超大 `@pytest.mark.parametrize` 矩阵）进行了跨 `.github/workflows/ci.yml`、`tools/README.md`、`src/` 与 `docs/agents/` 的全仓依赖核查：
 
 1. **M2/M3 工具资产仍处于现役调用链路，不得按里程碑名称整批删除**：
    - `.github/workflows/ci.yml` 的 `Build and inspect Gateway image` 步骤直接调用 `deploy/m2-live-03/build-image.sh` 与 `images.lock.json`；

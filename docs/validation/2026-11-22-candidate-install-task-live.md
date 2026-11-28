@@ -1,7 +1,7 @@
 # 停用候选安装任务：首次页面提交与现场验收
 
 本事件接续P4 [D37](../acceptance/environment-directory-qa-plan.md)与
-[ADR0296](../adr/0296-persistent-candidate-installation.md)。范围只是给已安装的自有实例
+[ADR0296](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0296-persistent-candidate-installation.md)。范围只是给已安装的自有实例
 成套安装停用候选的配置与运行工件；不登记、不运行业务、不激活。
 安装通过不等于候选业务已开通。
 

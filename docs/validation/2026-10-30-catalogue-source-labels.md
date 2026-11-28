@@ -27,7 +27,7 @@
 决策记录闸门：首个提交因「`fix(dify):` 动了 2 个源文件而 `docs/adr/` 未变」被
 `Workflow policy` 的 `adr.check.mjs` 拒绝。复核后判定确实欠一条记录（本片引入
 「读路径里多一次跨服务读 + TTL 缓存 + 静默降级」这个形态），补
-[ADR-0178](../adr/0178-catalogue-label-reads-the-dify-app-name.md)，没有用 `No-ADR:` 绕过。
+[ADR-0178](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0178-catalogue-label-reads-the-dify-app-name.md)，没有用 `No-ADR:` 绕过。
 
 类型检查：`uvx basedpyright` 在基线 worktree 与本分支各跑一次，
 本分支**没有新增**错误——两边错误集合逐条相同（18 条，均为既有的 Optional 收窄问题），

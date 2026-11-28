@@ -2,7 +2,7 @@
 
 本事件接续[D30导出](2026-11-19-candidate-runtime-live.md)，判据为
 [Feature](../acceptance/environment-directory.feature)、[QA D31](../acceptance/environment-directory-qa-plan.md)
-及[ADR0289](../adr/0289-runtime-install-recovery.md)。安装接线与完整业务启用分开。
+及[ADR0289](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0289-runtime-install-recovery.md)。安装接线与完整业务启用分开。
 
 ## 实现与本地验证
 

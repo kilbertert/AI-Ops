@@ -1,7 +1,7 @@
 # 候选准备串联：配套部署与正常管理页验收
 
 本事件接续P4 [D36](../acceptance/environment-directory-qa-plan.md)与
-[ADR0295](../adr/0295-candidate-preparation-parent-task.md)。用户批准共享管理桥与Web配套更新、
+[ADR0295](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0295-candidate-preparation-parent-task.md)。用户批准共享管理桥与Web配套更新、
 保留旧制品及失败恢复；不改公司服务或正式路由。范围是一次准备停用候选，不是完整开通或业务验收。
 
 ## 一次提交替代六次分散操作

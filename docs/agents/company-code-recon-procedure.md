@@ -270,7 +270,7 @@ $ deploy/company-gitlab-api.sh projects --search cloud-charging-pile | wc -l
 
 ### 本节命令清单与历史校验说明
 
-上面那套静态表格与示例命令在 2026-10-01 探查期间曾配有 6 个独立过程取证测试（`#475–#480`，含 `tests/integrations/test_recon_procedure_evidence.py` 等）：它们不校验 `src/` 业务代码，而是校对早期 Markdown 报告排版，并在无 `AIOPS_GL_CA` 凭据的常规 CI 环境下长期占用 8/10 个允许的 `skipped` 名额。相关历史过程测试已依据 [ADR-0356](../adr/0356-retire-historical-recon-evidence-tests.md) 随探查阶段完结整体退役；现役取数工具 `deploy/company-gitlab-api.sh` 与本手册继续保留。
+上面那套静态表格与示例命令在 2026-10-01 探查期间曾配有 6 个独立过程取证测试（`#475–#480`，含 `tests/integrations/test_recon_procedure_evidence.py` 等）：它们不校验 `src/` 业务代码，而是校对早期 Markdown 报告排版，并在无 `AIOPS_GL_CA` 凭据的常规 CI 环境下长期占用 8/10 个允许的 `skipped` 名额。相关历史过程测试已依据 [ADR-0356](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0356-retire-historical-recon-evidence-tests.md) 随探查阶段完结整体退役；现役取数工具 `deploy/company-gitlab-api.sh` 与本手册继续保留。
 
 ---
 

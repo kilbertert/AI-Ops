@@ -93,7 +93,7 @@ revision 1、同 workspace、`agent_name==entry-app_id`、同 profile/scenario�
 但同租户同环境现役（非 retracted）`chat_route_bindings` 行**就是占用**——重登记撞上自己还活着的绑定同样冲突，须先撤回（第一条闸）；
 同租户 `dify_app_registry` 行无论 app_id 新旧都是**本血统**留行从不冲突（重铸候选的 app_id 按 (workspace,job) 派生必然换新的，
 同租户异应用是谱系证据不是外血统）；候选 app_id 被**外租户**正式绑定是第二条独立闸——两条查询任一命中即 `SETUP_ROUTE_CONFLICT`。
-正式路由/密钥/准入不变，目标不取得共享Console管理凭据。依据`docs/adr/0290-inactive-runtime-registration.md`。
+正式路由/密钥/准入不变，目标不取得共享Console管理凭据。依据[ADR-0290（归档）](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0290-inactive-runtime-registration.md)。
 
 - `src/aiops_diagnostics/dify/dual_entry.py`（entry/scenario/channel 词表+channel 语义）
 - `src/aiops_diagnostics/dify/self_service.py` + `self_service_store.py`（幂等作业、partial 状态）

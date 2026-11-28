@@ -1,7 +1,7 @@
 # 候选运行接线工件部署与导出回执
 
 判据：[环境目录Feature](../acceptance/environment-directory.feature)、[QA D30](../acceptance/environment-directory-qa-plan.md)、
-[ADR0288](../adr/0288-environment-runtime-artifact.md)。本事件记录运行配置准备，**不表示目标已安装或业务已启用**。
+[ADR0288](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0288-environment-runtime-artifact.md)。本事件记录运行配置准备，**不表示目标已安装或业务已启用**。
 
 ## 实现与验证
 

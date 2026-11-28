@@ -1,6 +1,6 @@
 # 停用客服候选试运行：部署与一次真实执行回执
 
-本事件接续[D35合同](../acceptance/environment-directory-qa-plan.md)及[ADR0294](../adr/0294-inactive-consumer-trial.md)。
+本事件接续[D35合同](../acceptance/environment-directory-qa-plan.md)及[ADR0294](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0294-inactive-consumer-trial.md)。
 范围为获准的124/LTA-CSMS一次只读候选试运行；P4完整业务预检、激活和P5客户端仍未完成。
 
 ## 合并、部署与修复

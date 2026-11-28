@@ -132,6 +132,7 @@ def test_readme_module_references_point_at_real_files() -> None:
         "AGENTS.md",
         "CLAUDE.md",
         "docs/README.md",
+        "docs/adr-index.md",
         "docs/agents/current-delivery-state.md",
         "docs/agents/environment-registry.md",
     ],

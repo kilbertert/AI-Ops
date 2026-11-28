@@ -2,7 +2,7 @@
 
 日期：2026-11-25
 状态：已采纳
-部分替代：[ADR-0097](0097-milestone-records-are-one-file-each.md)（仅替代其原仓库工作树内永久冻结保留 `docs/validation.md`、`docs/开发进度.md` 与历史开发进度的条款；必要验收事件“一事件一独立文件”原则继续保留）
+部分替代：[ADR-0097](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0097-milestone-records-are-one-file-each.md)（仅替代其原仓库工作树内永久冻结保留 `docs/validation.md`、`docs/开发进度.md` 与历史开发进度的条款；必要验收事件“一事件一独立文件”原则继续保留）
 范围：`docs/validation*`、`docs/开发进度*`、`tests/test_milestone_archive_is_frozen.py`、`tests/milestone_archive_headings.json`、`tests/test_repository_layout.py`、`tests/gateway/test_assistant_cancel_handoff.py`、`.sandcastle/conflict-surface.mjs`
 
 ## 背景
@@ -23,7 +23,7 @@
 2. **同步放松并清理已失效的冻结门禁**：
    - 删除专用于守护两份旧单体文件的 `tests/test_milestone_archive_is_frozen.py` 与 `tests/milestone_archive_headings.json`，同步更新 `tests/test_repository_layout.py` 白名单；
    - 更新 `tests/gateway/test_assistant_cancel_handoff.py` 与 `.sandcastle/conflict-surface.mjs`，去除对已迁出两份旧单体文件与 `docs/开发进度/` 目录的扫描，跳过 `README.md` 说明页并继续对 `qa-plan.md` 与现役 `docs/validation/` 实际回执执行取消归属与路由契约检查；
-   - 更新 `README.md`、`docs/README.md`、`docs/agents/current-delivery-state.md` 与 [ADR-0097](0097-milestone-records-are-one-file-each.md) 的替代标注。
+   - 更新 `README.md`、`docs/README.md`、`docs/agents/current-delivery-state.md` 与 [ADR-0097](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0097-milestone-records-are-one-file-each.md) 的替代标注。
 
 ## 备选方案
 

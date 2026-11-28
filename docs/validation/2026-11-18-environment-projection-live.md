@@ -42,7 +42,7 @@ health `1.18.0+9ab1a740cb0a`；注释tag `v1.18.0` 指向同合并修订。
 前后草稿、目录、正式路由、health及六共享容器保持，仅新增一条自有计划记录。
 未保存草稿、开户、发布、激活或安装目标；临时浏览器和运维连接已结束。
 
-操作与边界见[环境目录手册](../agents/environment-registry.md#停用候选配置投影)、[ADR0279](../adr/0279-disabled-environment-configuration-projection.md)。
+操作与边界见[环境目录手册](../agents/environment-registry.md#停用候选配置投影)、[ADR0279](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0279-disabled-environment-configuration-projection.md)。
 原始探针、归档、图像、模板及主机快照留私有缓存；本事件仅留本回执，普通进度归原Issue。
 
 没有验证Git合并来源、全部设置组合、外部文件/凭据授权、目标路径、现场容量/正式网络、安装恢复或业务。

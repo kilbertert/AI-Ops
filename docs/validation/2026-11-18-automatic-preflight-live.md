@@ -45,7 +45,7 @@ Web/管理桥1.21.0及登录代理1.15.0兼容保持，未因版本号重新部�
 应用仍1.19.0，目录revision3，环境和两个租户停用，仅新增私有现场回执及本任务固定制品暂存。
 浏览器与临时管理连接已关闭；没有公司服务/业务行、95部署、时序直连账户或业务SSH通道改动。
 
-操作复用[自动执行端手册](../agents/environment-registry.md#自动执行端配套)及[ADR0282](../adr/0282-managed-preflight-task-worker.md)。
+操作复用[自动执行端手册](../agents/environment-registry.md#自动执行端配套)及[ADR0282](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0282-managed-preflight-task-worker.md)。
 制品、配置、主机/服务日志、截图、初次失败与取消恢复记录留私有artifact；本事件仅本回执。
 P4自动只读预检已接通；资源准备与外部未知结果对账、真实身份/网络/业务验证、安装任务及受控激活仍待完成。
 两环境各两租户三功能和长期容量尚未联合验收，P4/P5保持open。

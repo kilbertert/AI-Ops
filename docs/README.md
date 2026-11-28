@@ -19,7 +19,7 @@
 | 前端：C端、报告页和管家接线 | [C端交接](agents/consumer-wf01/app-handoff.md)、[横幅交接](agents/frontend-banner-handoff.md)、[电池报告页交接](agents/frontend-battery-report-handoff.md)、[管家交接](agents/frontend-operator-handoff.md) |
 | 部署、升级、回退 | [Gateway](gateway.md)、[节点](../deploy/node-runtime/README.md)、[Dify](../deploy/dify-36/README.md)、[WF01迁移](agents/consumer-wf01/live-knowledge-deploy.md) |
 | 本地服务与退役边界 | [快速上手](快速上手.md)、[旧执行器退役](runtime-retirement.md) |
-| 设计理由、术语、自动开发流程 | [ADR](adr/)、[词汇表](../GLOSSARY.md)、[AFK](afk-workflow.md) |
+| 设计理由、术语、自动开发流程 | [现行 ADR 索引](adr-index.md)（125 份生效决策） / [全部保留目录](adr/)、[词汇表](../GLOSSARY.md)、[AFK](afk-workflow.md) |
 | 某次执行究竟验了什么 | [验收记录](validation/)、[开发进度](开发进度/)；按日期、文件名找对应记录 |
 
 ## 各类文档的职责与归档
@@ -32,7 +32,7 @@
 | gateway、ops、deploy及agents操作手册 | 保存可复用方法；主机与凭据从受控记录读取，不能照历史命令恢复已退役能力 |
 | validation、开发进度 | 必要验收事件在 `docs/validation/<日期>-<短名>.md` 留一份现役回执；普通进度留原 Issue。依据 [ADR-0345](adr/0345-offload-legacy-receipts-to-archive-repo.md)，旧单体归档（原 `docs/validation.md`、`docs/开发进度.md`）、全部历史 `docs/开发进度/*.md` 及未再引用的旧回执已迁出至独立私有归档仓库 [`kilbertert/AI-Ops-history-archive`](https://github.com/kilbertert/AI-Ops-history-archive) |
 | reviews | 阶段复核与任务处置；PRD和执行依赖仍以GitHub原生issue关系为准 |
-| ADR、GLOSSARY | 决定与术语；新决定由后继ADR说明，不借整理改业务合同 |
+| ADR、GLOSSARY | [现行 ADR 索引](adr-index.md)与术语；新决定由后继 ADR 说明（编号自 `0371` 起顺延，不复用）。依据 [ADR-0370](adr/0370-archive-superseded-and-tactical-adrs.md)，231 份已被取代/撤回/局部战术 ADR 已迁入 [`kilbertert/AI-Ops-history-archive`](https://github.com/kilbertert/AI-Ops-history-archive/tree/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr) |
 | 本机未跟踪素材 | `原型/`、`知识库材料/` 两目录在 `.gitignore` 中，是本机素材不进版本控制——克隆后不存在，别按它们评估仓库规模 |
 | 原始日志、主机快照、会话、工作区清理清单 | 私有归档；仓库只留经过选择和脱敏的结论与方法 |
 

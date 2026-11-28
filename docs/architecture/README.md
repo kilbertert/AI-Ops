@@ -1,6 +1,6 @@
 # 架构规划与现行规范
 
-本目录仅保留已定稿的架构规划、目录规范与核心运行设计；早期方案草稿与退役架构图已按 [ADR-0343](../adr/0343-prune-redundant-drafts-and-obsolete-archives.md) 移出工作树（历史追溯见 Git 提交 `57c1d788`）。
+本目录仅保留已定稿的架构规划、目录规范与核心运行设计；早期方案草稿与退役架构图已按 [ADR-0343](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0343-prune-redundant-drafts-and-obsolete-archives.md) 移出工作树（历史追溯见 Git 提交 `57c1d788`）。
 
 - [手工环境目录与一键开通规划](2026-11-16-manual-environment-onboarding.md)：不改公司仓库的现行方向、Dify 管理 Tab、实施顺序与验收合同；现役行为与阶段证据从 [试点导航](../README.md#环境目录试点与验收) 与 [当前交付状态](../agents/current-delivery-state.md) 读取。
 - [仓库目录规范](repository-layout.md#现行目录规则)：仓库源码、测试、部署与工具的一级归属约束（由 `tests/test_repository_layout.py` 门禁守护）。

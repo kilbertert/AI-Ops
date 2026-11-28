@@ -1,7 +1,7 @@
 # 共享Dify受限HTTPS服务入口
 
 第二环境使用既有同域名、精确来源受限的正式服务API入口，现行决定见[ADR0306](../adr/0306-formal-scoped-dify-service-ingress.md)。
-原[ADR0266](../adr/0266-temporary-shared-dify-https.md)保留临时恢复的历史依据；本次用途转正不改变配置或暴露范围。
+原[ADR0266](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0266-temporary-shared-dify-https.md)保留临时恢复的历史依据；本次用途转正不改变配置或暴露范围。
 部署目标、来源IP、凭据和原始网络证据留在私有记录。公网可达与真实应用验证完成前不得写成恢复成功。
 
 ## 准备与部署

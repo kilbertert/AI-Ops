@@ -1,7 +1,7 @@
 # 受管主机身份验收：首次页面提交与独立取证
 
 本事件验收 P4 [D38](../acceptance/environment-directory-qa-plan.md)与
-[ADR0299](../adr/0299-managed-host-verification-task.md)（PR #1638 + 补漏 #1639）。
+[ADR0299](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0299-managed-host-verification-task.md)（PR #1638 + 补漏 #1639）。
 范围只证明：经既有 dev-host 指纹断言通道，受限执行端对任务目标**只读采集**
 hostname、machine-id 摘要与服务身份存在性；不代替正式网络、容量与业务验收。
 

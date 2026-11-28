@@ -5,7 +5,7 @@ Date: 2026-11-26
 
 ## Context
 
-[ADR-0354](0354-optimize-test-memory-and-sqlite-speed.md) 解决了 worker 内存膨胀与测试期 SQLite/源码守卫性能问题，但日常开发与多数 PR 仍会在无区分地执行耗时最长的重型用例：
+[ADR-0354](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0354-optimize-test-memory-and-sqlite-speed.md) 解决了 worker 内存膨胀与测试期 SQLite/源码守卫性能问题，但日常开发与多数 PR 仍会在无区分地执行耗时最长的重型用例：
 
 1. **Docker Compose / 本地容器验证与无头浏览器回放占主导长尾**：
    - `tests/dify/test_dify_knowledge_editor_role.py`（23.25 s）、`tests/dify/test_dify_idempotent_import.py`（21.04 s）与 `tests/dify/test_dify36_deploy_assets.py`（中 4 条 `compose` 校验，总计 6 条 `docker` 用例）会启动或调用本地 Docker Compose；

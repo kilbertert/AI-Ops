@@ -1,7 +1,7 @@
 # 消费者候选应用配套部署与验收
 
 本事件记录P4消费者候选准备；判据为[环境目录Feature](../acceptance/environment-directory.feature)、
-[QA D29](../acceptance/environment-directory-qa-plan.md)和[ADR0287](../adr/0287-candidate-consumer-frozen-workflow.md)。
+[QA D29](../acceptance/environment-directory-qa-plan.md)和[ADR0287](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0287-candidate-consumer-frozen-workflow.md)。
 不替代管家1.26.0历史回执。真实模型、知识内容、目标环境业务取数及激活仍待验。
 
 ## 实现与检查
