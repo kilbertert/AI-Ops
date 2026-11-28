@@ -59,7 +59,7 @@
 
 ## 5. 跨跳排障速查（`X-Request-Id`）
 
-Nginx 边缘片段（`dify-console-publish.conf` 与 `dify-login-proxy.conf`）会为每个 `/__aiops/*`、`/aiops/*` 与 `/console/api/logout` 请求生成并透传 `X-Request-Id`（同时写入响应头）。出现 403 / 502 时：
+Nginx 边缘片段（`dify-console-publish.conf` 与 `dify-login-proxy.conf`）会为每个 `/__aiops/*`、`/aiops/*` 与 `/console/api/logout` 请求生成并透传 `X-Request-Id`（响应只保留一枚由 Nginx 写入的 ID，避免与侧边车回显重复）。出现 403 / 502 时：
 1. 在浏览器 DevTools → Network 复制响应头里的 `X-Request-Id`；
 2. 在 `36` 按同一个 ID 直接对齐三跳日志：
    ```bash
