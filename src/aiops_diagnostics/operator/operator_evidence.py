@@ -124,7 +124,13 @@ def render_evidence(evidence, language, *, secrets=(), attachments=None):
             continue
         kind = (
             "computed"
-            if tool in {"cpms_order_amount_check", "cpms_order_process_stats", "cpms_station_plan"}
+            if tool
+            in {
+                "cpms_order_amount_check",
+                "cpms_order_settlement_check",
+                "cpms_order_process_stats",
+                "cpms_station_plan",
+            }
             else "raw"
         )
         lines.extend(["\n" + sources.get(tool, tool), words[kind]])

@@ -15,6 +15,16 @@
 > 不事后补写（事后凭 commit 标题重构「用户感知」是编造），历史缺口原样保留。
 > 当前缺口：`1.29.0`–`1.40.0`（截至 2026-11-23）。
 
+## [1.44.0] - 2026-11-28
+
+### Added
+- 新增管家端「商城结算金额分析与 6 大清分规则核验」能力（ADR-0374）：新增只读工具 `cpms_order_settlement`（`/mall-settlement/{order_no}`）与确定性核验工具 `cpms_order_settlement_check`（`/order-settlement-check/{order_no}`），并同步更新 `operator_tools.json`（13 工具）与 `operator_sop.md`。
+- 在单一 `REPEATABLE READ` 只读事务快照内分步读取 `cloud_charging_pile` 与 `qumall_mall`（强制 `tenant_id` 与 `shop_id=site_id` 作用域下推，规避跨库排序规则冲突），按 `Decimal` + `ROUND_HALF_UP` 四舍五入到分识别 3 种清分模式（电费单独结算 `0` / 整笔订单跟随 `1` / 电费跟随服务费结算 `2`）并逐项核验订单结算金额、启动费服务费及通道费溢出扣减、实付款一致性、支付通道费分项与合计、平台总服务费与订单分佣基数。
+- 落实诚实边界与只读契约：存在停车费/占枪费/安心充/预约费等附加科目、按电量定额抽成（`settleFeeOfElect > 0`）、非零退款、缺失 `shop_level` 或清分模式冲突时，受影响汇总项明确标为「待验证」而非误报不一致或通过；规则 2 启动费服务费未扣减通道费溢出时明确检出「不一致」并给出原因；核验结果附带限制说明，绝不宣称银行实际打款到账。
+
+### Notes
+- 遵循 ADR-0188 升级顺序：上线本版本前须先重渲染节点回调配置（放行新工具名与路径）、更新执行节点 `operator-tools.json` 与 Gateway 侧 `operator-exec-manifest.json`，待节点心跳上报新工具摘要后再部署 Gateway 并迁移 Dify `cpms-node` 提供方及发布管家应用；既有独立客户环境（如 `jiejia`）在未主动升级发布前保持 11 工具冻结快照不受影响。
+
 ## [1.43.28] - 2026-11-28
 
 ### Changed

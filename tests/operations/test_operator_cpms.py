@@ -742,6 +742,8 @@ def test_draft_toggle_does_not_publish_and_disabled_tool_cannot_be_called(operat
         "cpms_order_process_stats",
         "cpms_charging_timeline",
         "cpms_order_communications",
+        "cpms_order_settlement",
+        "cpms_order_settlement_check",
     }
     current = f["publish"](f["route"].route_revision)
     assert [v["name"] for v in json.loads(current.manifest_text)["tools"]] == [operator_cpms.TOOL_NAMES[0]]
