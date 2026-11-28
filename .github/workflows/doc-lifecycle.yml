@@ -13,10 +13,6 @@ on:
 
 permissions: {}
 
-concurrency:
-  group: doc-lifecycle-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 jobs:
   pr-check:
     name: PR doc check
@@ -25,6 +21,9 @@ jobs:
       (github.event.action == 'ready_for_review' || github.event.pull_request.draft == false)
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    concurrency:
+      group: doc-lifecycle-pr-${{ github.ref }}
+      cancel-in-progress: true
     permissions:
       contents: read
     steps:
@@ -60,6 +59,11 @@ jobs:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # 定时与手动巡检写同一个仓库级 Issue，串行执行以避免重复创建。
+    concurrency:
+      group: doc-lifecycle-maintenance-ledger
+      cancel-in-progress: false
+      queue: max
     permissions:
       contents: read
       issues: write
