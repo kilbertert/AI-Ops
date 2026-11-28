@@ -39,5 +39,6 @@ status: active
 
 ## 验证
 
-- **Phase 1**：`tests/tooling/test_doc_lifecycle.py`（覆盖全部 5 条硬门禁、幽灵引用、`llmdoc` 漂移、GC 不可达回执、Legal Hold 与现仓全量校验）与真实仓库 `doc_lifecycle.py audit` 验证通过。
-- **Phase 2 / Phase 3**：随各自阶段 PR 补齐验证记录。
+- **Phase 1**（PR #1820 / `f5e27ab0`）：`tests/tooling/test_doc_lifecycle.py`（覆盖全部 5 条硬门禁、幽灵引用、squash 合并后的 `llmdoc` 漂移回退、GC 不可达回执、Legal Hold 与现仓全量校验）与真实仓库 `doc_lifecycle.py audit` 验证通过。
+- **Phase 2**（PR #1821 / `6501c9b2`）：`tests/tooling/test_doc_archive.py`（本地双 bare 仓离线端到端归档、SHA-256 校验、permalink 改写、索引同步、编号冻结与 Fail-Closed 拦截）及真实仓库 `--dry-run` 演练通过。
+- **Phase 3**（`.github/workflows/doc-lifecycle.yml`）：`tests/tooling/test_doc_lifecycle_workflow.py`（工作流触发器、SHA 锁定、最小权限、无表达式注入及假 `gh` 驱动滚动台账 Issue 建/改/关/空跑 4 分支测试）与 PR 实测 `Doc Lifecycle / PR doc check` 通过。
