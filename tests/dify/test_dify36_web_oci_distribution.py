@@ -194,3 +194,54 @@ esac
         assert "AUTO_ROLLED_BACK" not in result.stderr
     else:
         assert "AUTO_ROLLED_BACK" in result.stderr
+
+
+def test_redeploying_same_digest_preserves_one_click_rollback(tmp_path: Path) -> None:
+    old_ref = f"registry.example.test/release/web@sha256:{'a' * 64}"
+    new_ref = f"registry.example.test/release/web@sha256:{'b' * 64}"
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"DIFY_WEB_IMAGE={old_ref}\n", encoding="utf-8")
+    ledger = tmp_path / ".dify-web-release.json"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stubs = {
+        "dev-host": '#!/usr/bin/env bash\nexec bash -c "${@: -1}"\n',
+        "docker": """#!/usr/bin/env bash
+set -eu
+case "$1" in
+  pull|run|compose) exit 0 ;;
+  ps) echo "dify-web healthy" ;;
+  *) exit 99 ;;
+esac
+""",
+        "curl": """#!/usr/bin/env bash
+case "${@: -1}" in
+  */signin) printf 200 ;;
+  */aiops/environments) printf 307 ;;
+  *) exit 99 ;;
+esac
+""",
+    }
+    for name, script in stubs.items():
+        stub = bin_dir / name
+        stub.write_text(script, encoding="utf-8")
+        stub.chmod(0o755)
+
+    def deploy(*args: str) -> None:
+        result = subprocess.run(
+            ["bash", str(DEPLOY_SH), "--deploy-dir", str(tmp_path), *args],
+            check=False,
+            env={"PATH": f"{bin_dir}:{os.defpath}"},
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 0, result.stderr
+
+    deploy("--image", new_ref)
+    deploy("--image", new_ref)
+    deploy("--rollback")
+    assert env_file.read_text(encoding="utf-8") == f"DIFY_WEB_IMAGE={old_ref}\n"
+    state = json.loads(ledger.read_text(encoding="utf-8"))
+    assert state["current_image"] == old_ref
+    assert state["previous_image"] == ""

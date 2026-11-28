@@ -289,7 +289,7 @@ weaviate 空闲 52.7 MiB。
     --image qushi-registry.cn-hangzhou.cr.aliyuncs.com/release/aiops-dify-web@sha256:<64位摘要>
   ```
   脚本会在 `36` 直接从 ACR `docker pull`、做只读启动文件冒烟校验、备份 `.env` 后仅更新 `DIFY_WEB_IMAGE` 并执行 `docker compose up -d --force-recreate web`（不改动 `api`、`worker`、`nginx` 及任何数据卷），随后探活 `http://127.0.0.1:10008/signin`（`200`）与 `/aiops/environments`（`307`），失败自动回退。
-- **一键回滚**：执行 `bash deploy/dify-36/web-patches/deploy-web-image.sh --rollback`，按 `.dify-web-release.json` 自动切回上一版本镜像；若需退回纯上游未打补丁版本，清空 `.env` 中的 `DIFY_WEB_IMAGE` 后 `--force-recreate web` 即可。
+- **一键回滚**：执行 `bash deploy/dify-36/web-patches/deploy-web-image.sh --rollback`，按 `.dify-web-release.json` 自动切回上一版本镜像（重复部署同一镜像摘要不会清除回滚记录）；若需退回纯上游未打补丁版本，清空 `.env` 中的 `DIFY_WEB_IMAGE` 后 `--force-recreate web` 即可。
 - *历史人工兜底（已废弃，仅当 ACR 完全不可用时作紧急参考）*：早期曾通过本地 `docker cp /app/targets/next/.` 压成 tar 包、`dev-host cp` 传至 `36` 并基于 `1panel.live` 重打单层镜像，日常发版严禁再走该路径。
 
 **构建必须用 webpack。** 上游的 `pnpm build` 走 Turbopack，在本环境会 OOM(137)/超时(124)；`build-web-image.sh` 已固定切换为 `next build --webpack`，请勿改回。
