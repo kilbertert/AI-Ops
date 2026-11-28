@@ -1,22 +1,11 @@
 {
+  "name": "AI-Ops",
   "private": true,
   "type": "module",
   "scripts": {
-    "afk": "tsx .sandcastle/main.ts",
-    "ralph": "tsx .sandcastle/planner.ts",
-    "afk:policy": "node .sandcastle/policy-check.mjs all",
-    "cd:watch": "node .sandcastle/cd-watch.mjs",
-    "cd:state": "node .sandcastle/deploy-state.mjs",
-    "cd:watch:test": "node .sandcastle/cd-watch.test.mjs",
+    "cd:watch": "node tools/verification/cd-watch.mjs",
+    "cd:state": "node tools/verification/deploy-state.mjs",
+    "cd:watch:test": "node tools/verification/cd-watch.test.mjs",
     "test": "./tools/test.sh"
-  },
-  "dependencies": {
-    "tsx": "^4.20.0",
-    "zod": "^4.4.3"
-  },
-  "devDependencies": {
-    "@ai-hero/sandcastle": "^0.12.0",
-    "@types/node": "^24.0.0"
-  },
-  "name": "AI-Ops"
+  }
 }

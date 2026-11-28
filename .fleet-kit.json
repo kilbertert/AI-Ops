@@ -1,0 +1,12 @@
+{
+  "schema": "fleet.config/v1",
+  "fleet_kit_ref": "v1",
+  "consensus_compatibility": ">=1.0.0 <2.0.0",
+  "policy_gate": {
+    "adr_check": true,
+    "custom_checks": [
+      "node tools/verification/conflict-surface.mjs --self-check",
+      "node tools/verification/conflict-surface.mjs --check"
+    ]
+  }
+}

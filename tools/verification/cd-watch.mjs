@@ -19,7 +19,7 @@
  * 用法：`gh auth login` 之后 `node .sandcastle/cd-watch.mjs [--dry-run] [--limit N]`
  */
 
-import { fetchRunnerSummary } from "./queue/status.mjs";
+import { fetchRunnerSummary } from "./runner-status.mjs";
 import { execFileSync } from "node:child_process";
 import {
   DEFAULT_STRAIGHT_FAILURES,
