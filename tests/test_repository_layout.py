@@ -12,7 +12,7 @@ LAYOUT = {
     "": (
         frozenset(
             [
-                ".afk-bootstrap.json",
+                ".fleet-kit.json",
                 ".dev-host.toml",
                 ".env.example",
                 ".gitignore",
@@ -38,7 +38,6 @@ LAYOUT = {
             [
                 ".claude",
                 ".github",
-                ".sandcastle",
                 ".spec",
                 "deploy",
                 "docs",

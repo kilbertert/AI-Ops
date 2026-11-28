@@ -1,16 +1,7 @@
 name: Mirror to company GitLab
 
-# Mirrors every pushed ref to the company GitLab at ai-products/ai-ops.
-# This runs on GitHub's side because the development host's managed push
-# policy forbids direct pushes to the default branch, and the company
-# GitLab cannot reach github.com for pull mirroring.
-#
-# Requires repo secret GITLAB_MIRROR_TOKEN: a GitLab token (impersonation
-# or PAT) with write_repository on ai-products/ai-ops.
+# 镜像推送至公司 GitLab：由 kilbertert/fleet-kit@v1 统一提供零拷贝实现。
 
-# push covers branch/tag updates; delete covers removals (branch/tag
-# deletion emits a separate event, not push); workflow_dispatch allows a
-# manual re-sync (e.g. after the GitLab side is restored or reseeded).
 on:
   push:
   delete:
@@ -22,23 +13,11 @@ concurrency:
   group: gitlab-mirror
   cancel-in-progress: false
 
-permissions:
-  contents: read
-
 jobs:
   mirror:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Bare-clone branches and tags
-        run: |
-          git clone --bare \
-            "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" \
-            repo.git
-          # GitHub advertises refs/pull/*; the mirror carries heads+tags only.
-          git -C repo.git for-each-ref --format='%(refname)' 'refs/pull' \
-            | xargs -r -n1 git -C repo.git update-ref -d
-      - name: Push mirror to GitLab
-        run: |
-          # Company GitLab serves a self-signed certificate.
-          git -C repo.git -c http.sslVerify=false push --mirror \
-            "https://oauth2:${{ secrets.GITLAB_MIRROR_TOKEN }}@git.qushiyun.com:801/ai-products/ai-ops.git"
+    permissions:
+      contents: read
+    uses: kilbertert/fleet-kit/.github/workflows/gitlab-mirror.yml@v1
+    with:
+      gitlab_target_url: git.qushiyun.com:801/ai-products/ai-ops.git
+    secrets: inherit

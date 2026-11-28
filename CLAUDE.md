@@ -9,17 +9,3 @@ evidence. Never point it at the real `AIOPS_DATA_HOME`, and never record a devic
 token in evidence or a commit.
 
 新增或移动文件前，执行 `AGENTS.md` 的「目录与模块归属」要求，并查阅其中链接的现行目录规则。
-
-<!-- afk-bootstrap:managed:start -->
-## AFK workflow gate
-
-For idea or planning work, read `docs/afk-workflow.md` and the applicable
-files under `docs/agents/` first.
-
-`/grill-with-docs` ends only when its frontier is empty: report
-`GRILLING_COMPLETE`, summarize the shared understanding, ask the user to
-confirm it, and stop. Confirmation completes grilling only. Wait for the user
-to explicitly invoke `/to-spec`, `/to-tickets`, `/implement`, or
-`/implement-spec`; do not enter another phase automatically. Multi-session
-work uses `/to-spec` then `/to-tickets` before implementation.
-<!-- afk-bootstrap:managed:end -->

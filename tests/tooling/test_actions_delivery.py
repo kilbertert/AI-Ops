@@ -1,4 +1,4 @@
-"""交付自动化的行为边界：候选竞争与 pytest 的失败信号。"""
+"""交付自动化的行为边界：CD Watch、sync-open-prs 薄壳委托与 pytest 失败信号。"""
 
 import importlib.util
 import json
@@ -39,101 +39,6 @@ def test_result_guard_uses_junit_outcomes(tmp_path):
         module.check_results(report, 1)
 
 
-def candidate(number, **changes):
-    return {
-        "number": number,
-        "state": "OPEN",
-        "baseRefName": "main",
-        "isDraft": False,
-        "mergeStateStatus": "BEHIND",
-        "author": {"login": "owner"},
-        "isCrossRepository": False,
-        "assignees": [],
-        "labels": [],
-        "headRefOid": f"head-{number}",
-        **changes,
-    }
-
-
-def sync(tmp_path, current, api_exit=0):
-    refreshed = tmp_path / "current.json"
-    refreshed.write_text(json.dumps(current))
-    calls = tmp_path / "calls.jsonl"
-    cli = tmp_path / "gh"
-    cli.write_text(
-        "#!/usr/bin/env python3\n"
-        "import json, os, sys\n"
-        "from pathlib import Path\n"
-        "args = sys.argv[1:]\n"
-        "if args[:2] == ['pr', 'view']: print(Path(os.environ['CURRENT']).read_text())\n"
-        "elif args[0] == 'api':\n"
-        "    with Path(os.environ['CALLS']).open('a') as out: out.write(json.dumps(args) + '\\n')\n"
-        "    sys.exit(int(os.environ['API_EXIT']))\n"
-        "else: sys.exit(99)\n"
-    )
-    cli.chmod(0o700)
-    result = subprocess.run(
-        ["bash", "-c", workflow_step("sync-open-prs.yml", "Update one delivery candidate")],
-        env={
-            **os.environ,
-            "PATH": f"{tmp_path}:{os.environ['PATH']}",
-            "GH_REPO": "owner/example",
-            "REPOSITORY_OWNER": "owner",
-            "PR_NUMBER": "1",
-            "CURRENT": str(refreshed),
-            "CALLS": str(calls),
-            "API_EXIT": str(api_exit),
-            "GITHUB_STEP_SUMMARY": str(tmp_path / "summary.md"),
-        },
-        text=True,
-        capture_output=True,
-        timeout=30,
-    )
-    return result, [json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
-
-
-def test_sync_updates_only_one_candidate_with_expected_head(tmp_path):
-    result, calls = sync(tmp_path, candidate(1))
-    assert result.returncode == 0, result.stderr
-    assert calls == [
-        [
-            "api",
-            "--method",
-            "PUT",
-            "repos/owner/example/pulls/1/update-branch",
-            "-f",
-            "expected_head_sha=head-1",
-        ]
-    ]
-
-
-@pytest.mark.parametrize(
-    "changes",
-    [
-        {"state": "CLOSED"},
-        {"baseRefName": "develop"},
-        {"isDraft": True},
-        {"isCrossRepository": True},
-        {"author": {"login": "someone-else"}},
-        {"assignees": [{"login": "owner"}]},
-        {"labels": [{"name": "agent:in-progress"}]},
-        {"labels": [{"name": "agent:update-branch"}]},
-        {"labels": [{"name": "agent:blocked"}]},
-        {"mergeStateStatus": "DIRTY"},
-    ],
-)
-def test_sync_leaves_unapproved_or_owned_work_untouched(tmp_path, changes):
-    result, calls = sync(tmp_path, candidate(1, **changes))
-    assert result.returncode != 0
-    assert calls == []
-
-
-def test_sync_does_not_hide_a_rejected_update(tmp_path):
-    result, calls = sync(tmp_path, candidate(1), api_exit=1)
-    assert result.returncode != 0
-    assert len(calls) == 1
-
-
 @pytest.mark.parametrize(
     "deploy,release",
     [("success", "failure"), ("failure", "skipped"), ("success", "success"), (None, None)],
@@ -157,7 +62,7 @@ def test_cd_watch_preserves_workflow_and_deployment_results(tmp_path, deploy, re
     )
     cli.chmod(0o700)
     script = (
-        f"import {{fetchRuns}} from {json.dumps((ROOT / '.sandcastle/cd-watch.mjs').as_uri())};"
+        f"import {{fetchRuns}} from {json.dumps((ROOT / 'tools/verification/cd-watch.mjs').as_uri())};"
         "console.log(JSON.stringify(fetchRuns().runs[0]));"
     )
     result = subprocess.run(
@@ -190,10 +95,12 @@ def test_release_job_is_bound_to_successful_deployment():
     assert jobs["deploy-41"]["concurrency"]["cancel-in-progress"] is False
 
 
-def test_automatic_sync_events_only_report():
-    jobs = yaml.safe_load((ROOT / ".github/workflows/sync-open-prs.yml").read_text())["jobs"]
-    step = next(s for s in jobs["sync"]["steps"] if s["name"] == "Update one delivery candidate")
-    assert step["if"] == "github.event_name == 'workflow_dispatch'"
+def test_automatic_sync_events_only_report_via_fleet_kit():
+    doc = yaml.safe_load((ROOT / ".github/workflows/sync-open-prs.yml").read_text())
+    job = doc["jobs"]["sync"]
+    assert job["uses"] == "kilbertert/fleet-kit/.github/workflows/sync-open-prs.yml@v1"
+    assert "github.event_name == 'workflow_dispatch'" in str(job["with"]["pr_number"])
+    assert job["secrets"] == "inherit"
 
 
 def test_empty_document_selection_propagates_full_tier(tmp_path):
