@@ -474,3 +474,60 @@ def test_legacy_tenant_setup_retired_and_single_env_login_hides_selector() -> No
     assert '"catalogue"' not in bridge
     assert '"/operations"' not in bridge
     assert "data.environments.length <= 1" in login_html
+
+
+def test_node_all_targets_ignores_remote_environment_operator_apps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """控制面启动加载本机节点目标时，必须忽略远端客户环境的 operator_apps 行。"""
+    from aiops_diagnostics.dify import self_service_config
+    from aiops_diagnostics.dify.self_service_store import SelfServiceStore
+    from aiops_diagnostics.execution import node_publication
+
+    db_file = tmp_path / "control.db"
+    store = SelfServiceStore(db_file)
+    store.register(
+        app_id="137cc417-f068-43c2-9d4a-43ebd254ea01",
+        tenant_id="1942105476598861824",
+        workspace_id="c3f871e1-ffd0-4a10-a84a-b8696f7acd25",
+        agent_name="ops-methodology-700",
+        profile_id="operator-41",
+        actor="test",
+        entry="operator",
+        environment="41",
+    )
+    store.register(
+        app_id="71a466cc-7298-58ef-bad2-7f6031239e8e",
+        tenant_id="1990990768688599040",
+        workspace_id="c8c0a12f-7e0c-4564-8f40-cb1bc212bca0",
+        agent_name="operator-jiejia",
+        profile_id="operator-jiejia",
+        actor="test",
+        entry="operator",
+        environment="jiejia",
+    )
+
+    monkeypatch.setattr(
+        self_service_config,
+        "profiles",
+        lambda _s: {
+            "operator-41": {
+                "target": {
+                    "environment": "41",
+                    "entry": "operator",
+                    "config_file": str(tmp_path / "node.json"),
+                    "manifest_file": str(tmp_path / "manifest.json"),
+                }
+            }
+        },
+    )
+    monkeypatch.setattr(node_publication, "validate_target", lambda _row: None)
+
+    settings = SimpleNamespace(
+        database_file=db_file,
+        chat_node_targets_file="",
+        operator_profiles_file=str(tmp_path / "profiles.json"),
+        execution_environment="41",
+    )
+    loaded = node_publication.all_targets(settings)
+    assert [t.app_id for t in loaded] == ["137cc417-f068-43c2-9d4a-43ebd254ea01"]

@@ -15,6 +15,11 @@
 > 不事后补写（事后凭 commit 标题重构「用户感知」是编造），历史缺口原样保留。
 > 当前缺口：`1.29.0`–`1.40.0`（截至 2026-11-23）。
 
+## [1.43.25] - 2026-11-28
+
+### Fixed
+- 修复控制面启动阶段 `node_publication.all_targets()` 扫描 `operator_apps` 时未跳过远端独立客户环境行（`environment != execution_environment`）导致 `KeyError` 的二阶故障，同时将新环境向导写入控制面目录的远端管家行 `profile_id` 规范为空串。
+
 ## [1.43.24] - 2026-11-28
 
 ### Changed

@@ -600,7 +600,7 @@ def prepare_control_plane_bundle(
         tenant_id=tenant_id,
         workspace_id=workspace_id,
         agent_name=f"operator-{env}",
-        profile_id=f"operator-{env}",
+        profile_id="",
         actor=actor,
         entry="operator",
         environment=env,
