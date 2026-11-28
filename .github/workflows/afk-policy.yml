@@ -1,14 +1,11 @@
 name: AFK Policy
 
-# PR 的确定性交付与 ADR 边界检查；必需检查名 Workflow policy 保持稳定。
-# 重型 AFK 写码/评审沙箱流水线已退役，本工作流将在 Phase 2 收口至 fleet-kit@v1。
+# PR 确定性交付与 ADR 边界门禁：零拷贝调用 kilbertert/fleet-kit/actions/policy-gate@v1。
+# 通过 Composite Action 保持 GitHub Ruleset 必需检查名 `Workflow policy` 零中断。
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-
-permissions:
-  contents: read
 
 concurrency:
   group: policy-${{ github.ref }}
@@ -23,6 +20,8 @@ jobs:
     name: Workflow policy
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
       - name: Check out repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -30,36 +29,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
           fetch-depth: 0
-      - name: Set up Node.js
-        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+      - name: Run fleet-kit policy gate
+        uses: kilbertert/fleet-kit/actions/policy-gate@v1
         with:
-          node-version: 22
-      - name: Verify the repository map is current
-        run: node .sandcastle/repo-map.check.mjs
-      - name: Verify decision records
-        env:
-          AFK_ADR_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: node .sandcastle/adr.check.mjs --base "$AFK_ADR_BASE"
-      - name: Note where the changelog check runs
-        run: |
-          echo "CHANGELOG.md is verified by dev-policy-audit on the development host;"
-          echo "this job has neither dev-changelog nor git-cliff, so it cannot check it."
-      - name: Repository-map generator self-check
-        run: node .sandcastle/repo-map.mjs --self-check
-      - name: Conflict-surface table self-check
-        run: node .sandcastle/conflict-surface.mjs --self-check
-      - name: Conflict surface has no structural regression
-        run: node .sandcastle/conflict-surface.mjs --check
-
-      - name: Summarize policy
-        if: always()
-        env:
-          RESULT: ${{ job.status }}
-        run: |
-          {
-            echo '### 交付检查（Workflow policy）'
-            echo "- 结果：$RESULT"
-            echo '- 本检查覆盖仓库地图、冲突面自检与 ADR，不是模型审查。'
-            echo '- ADR 失败：先查看重复编号、缺失记录或提交中的 No-ADR 说明。'
-            echo '- 操作入口见 docs/agents/actions-delivery.md。'
-          } >> "$GITHUB_STEP_SUMMARY"
+          base_sha: ${{ github.event.pull_request.base.sha || github.event.before }}
