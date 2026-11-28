@@ -38,7 +38,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 def _load_host_agent():
     spec = importlib.util.spec_from_file_location(
         "host_release_agent",
-        REPO_ROOT / "ops/environments/gateway/host_release_agent.py",
+        REPO_ROOT / "src/aiops_diagnostics/onboarding/host_release_agent.py",
     )
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)

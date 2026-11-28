@@ -20,7 +20,7 @@ from aiops_diagnostics.onboarding import registry as env_registry
 from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentStore
 
 ROOT = Path(__file__).resolve().parents[2]
-AGENT_PATH = ROOT / "ops/environments/gateway/host_release_agent.py"
+AGENT_PATH = ROOT / "src/aiops_diagnostics/onboarding/host_release_agent.py"
 
 
 def _load_host_agent():

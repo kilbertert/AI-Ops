@@ -35,7 +35,7 @@ from aiops_diagnostics.execution import node_publication
 from aiops_diagnostics.knowledge.knowledge_retrieval import KbServiceClient, KnowledgeSearchUnavailable
 from aiops_diagnostics.onboarding import host_enrollment
 
-_AGENT_SCRIPT_PATH = Path(__file__).resolve().parents[3] / "ops/environments/gateway/host_release_agent.py"
+_AGENT_SCRIPT_PATH = Path(__file__).resolve().parents[1] / "onboarding/host_release_agent.py"
 
 
 def _host_agent_source() -> str:

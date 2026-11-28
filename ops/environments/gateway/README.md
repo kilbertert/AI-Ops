@@ -26,7 +26,7 @@
      --repository qushi-registry.cn-hangzhou.cr.aliyuncs.com/release/aiops-gateway \
      --no-pull-auth --central 41
    ```
-   客户机动作统一收口在纯标准库脚本 `ops/environments/gateway/host_release_agent.py`，经 SSH stdin 投递执行；容器直接由 `systemd` `EnvironmentFile=/opt/aiops-access-<env>/container.env` 托管。
+   客户机动作统一收口在随包发布的纯标准库脚本 `src/aiops_diagnostics/onboarding/host_release_agent.py`，经 SSH stdin 投递执行；容器直接由 `systemd` `EnvironmentFile=/opt/aiops-access-<env>/container.env` 托管。
 
 ---
 
