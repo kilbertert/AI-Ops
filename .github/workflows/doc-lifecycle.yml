@@ -9,12 +9,11 @@ on:
     - cron: "30 3 * * 0"
   workflow_dispatch:
 
-concurrency:
-  group: doc-lifecycle-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 jobs:
   pr-check:
+    concurrency:
+      group: doc-lifecycle-pr-${{ github.ref }}
+      cancel-in-progress: true
     if: >-
       github.event_name == 'pull_request' &&
       (github.event.action == 'ready_for_review' || github.event.pull_request.draft == false)
@@ -23,6 +22,11 @@ jobs:
     uses: kilbertert/fleet-kit/.github/workflows/doc-lifecycle-pr.yml@v1
 
   autovacuum:
+    # 定时和手动巡检写同一张仓库台账，必须共用队列。
+    concurrency:
+      group: doc-lifecycle-maintenance-ledger
+      cancel-in-progress: false
+      queue: max
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     permissions:
       contents: read
