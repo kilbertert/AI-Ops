@@ -282,51 +282,25 @@ weaviate 空闲 52.7 MiB。
 **api 为什么不重做镜像**：36 上的镜像来自 `docker.1panel.live`，自建 api 镜像要把整条构建链
 （`uv sync`、插件包、2.9 GB 上下文）搬上生产主机，爆炸半径从"5 个文件"变成"一整条链"。
 
-### web 侧：只能重做镜像（2026-10-21）
+### web 侧：阿里云 ACR 不可变镜像分发（ADR-0365）
 
-上一条的"不重做镜像"只对 api 成立。`dify-web` 镜像里只有编译后的 `.next`，**没有源码**，
-所以控制台界面的改动无法用文件挂载实现：必须按 tag 取源码 → 打补丁 → 重建。
+上一条的“不重做镜像”只对 `api`/`worker` 成立；`dify-web` 镜像内只有编译产物 `.next` 与 `server.js`，界面改动必须经由 `web-patches/` 编译新镜像。
 
-`web-patches/` 是这条链，纪律与 `patches/apply.sh` 相同（版本钉死 + 上游文件 sha256 核对）：
+当前标准构建、分发与 `36` 切换链路已统一收敛至公司阿里云 ACR（详见 [`web-patches/README.md`](web-patches/README.md)）：
 
-- `build-web-image.sh` 在**开发机**上跑完整构建，产出 `aiops/dify-web-patched:1.17.1`；
-- 但 `docker.1panel.live` 对开发机回 403，`FROM` 拿不到上游镜像。所以 36 上实际的组装是
-  **在 36 本地**用上游镜像做 base，把开发机产出的构建产物 COPY 进去：
-  ```dockerfile
-  FROM docker.1panel.live/langgenius/dify-web:1.17.1
-  COPY --chown=dify:dify .next/standalone/ /app/targets/next/
-  COPY --chown=dify:dify .next/static/ /app/targets/next/web/.next/static/
-  COPY --chown=dify:dify public/ /app/targets/next/web/public/
-  ```
-  （与上游 Dockerfile 的 COPY 三行一一对应，目标路径不能改：`entrypoint.sh` 写死了
-  `node /app/targets/next/web/server.js`。）
-- **成品树变体（2026-11-12 起）**：三条 COPY 面向的是**原始构建输出**（standalone、
-  static、public 分处三地）。如果传输的是从已构建镜像 `docker cp` 抽出的
-  `/app/targets/next` **整棵成品树**（已含 `web/.next/static` 与 `web/public`），
-  组装退化为单条 COPY，镜像内布局与三条 COPY 逐字一致：
+- **自动发布到 ACR**：每当 `main` 上的 `deploy/dify-36/web-patches/**` 有更新，或手工触发工作流 [`.github/workflows/release-dify-web-image.yml`](../../.github/workflows/release-dify-web-image.yml)，CI 会调用 [`publish-web-image.sh`](web-patches/publish-web-image.sh) 完成源码 SHA-256 校验、`build-web-image.sh` webpack 编译、非联网冒烟检查并推送到 `qushi-registry.cn-hangzhou.cr.aliyuncs.com/release/aiops-dify-web`，输出不可变 `@sha256` 镜像摘要与元数据 `dify-web-image.json`。
+- **36 一键拉取与滚动升级（零本地编译、零 `1panel.live` 组装）**：
   ```bash
-  # 开发机：从已构建镜像抽成品树（ctx 必须先建；docker rm 不管成败都要跑）
-  mkdir -p ctx/next
-  cid=$(docker create aiops/dify-web-patched:<tag>)
-  docker cp "$cid:/app/targets/next/." ctx/next/; docker rm "$cid"
-  # 打包传输：tar 含 next/ 与下面这份 Dockerfile；36 上解到任意目录（如 deploy/<name>-ctx/）
-  printf 'FROM docker.1panel.live/langgenius/dify-web:1.17.1\nCOPY --chown=dify:dify next/ /app/targets/next/\n' > ctx/Dockerfile
-  tar -C ctx -czf web-next.tar.gz next Dockerfile
-  # 36：解包后单 COPY 组装
-  mkdir <name>-ctx && tar -xzf web-next.tar.gz -C <name>-ctx
-  docker build -t aiops/dify-web-patched:<tag> <name>-ctx/
+  bash deploy/dify-36/web-patches/deploy-web-image.sh \
+    --image qushi-registry.cn-hangzhou.cr.aliyuncs.com/release/aiops-dify-web@sha256:<64位摘要>
   ```
-  两种形式的产物等价；选哪种取决于 tar 里装的是原始输出还是成品树。
-- 上线：`deploy/.env` 里写 `DIFY_WEB_IMAGE=aiops/dify-web-patched:1.17.1`，然后
-  `docker compose up -d --force-recreate web`。**`up -d` 不会重读镜像**，必须 force-recreate。
-- 回滚：把 `DIFY_WEB_IMAGE` 清空再 force-recreate 一次，回到上游镜像。
+  脚本会在 `36` 直接从 ACR `docker pull`、做只读启动文件冒烟校验、备份 `.env` 后仅更新 `DIFY_WEB_IMAGE` 并执行 `docker compose up -d --force-recreate web`（不改动 `api`、`worker`、`nginx` 及任何数据卷），随后探活 `http://127.0.0.1:10008/signin`（`200`）与 `/aiops/environments`（`307`），失败自动回退。
+- **一键回滚**：执行 `bash deploy/dify-36/web-patches/deploy-web-image.sh --rollback`，按 `.dify-web-release.json` 自动切回上一版本镜像；若需退回纯上游未打补丁版本，清空 `.env` 中的 `DIFY_WEB_IMAGE` 后 `--force-recreate web` 即可。
+- *历史人工兜底（已废弃，仅当 ACR 完全不可用时作紧急参考）*：早期曾通过本地 `docker cp /app/targets/next/.` 压成 tar 包、`dev-host cp` 传至 `36` 并基于 `1panel.live` 重打单层镜像，日常发版严禁再走该路径。
 
-**构建必须用 webpack。** 上游的 `pnpm build` 走 Turbopack，在这两台机器上都产不出东西
-（OOM 137 / 超时 124，`.next` 始终 1.1 MB）；`next build --webpack` 3.8 分钟成功。
-`build-web-image.sh` 已经把 Dockerfile 里那一行换掉，别改回去。
+**构建必须用 webpack。** 上游的 `pnpm build` 走 Turbopack，在本环境会 OOM(137)/超时(124)；`build-web-image.sh` 已固定切换为 `next build --webpack`，请勿改回。
 
-**没有清单就退回上游组件**：选择器只在端点能列出知识源时替换那个输入框；列不出来
-（stock provider、网关不可达）就渲染上游原本的 `Input`，对别的 provider 行为一字不变。
+**没有清单就退回上游组件**：选择器只在端点能列出知识源时替换那个输入框；列不出来（stock provider、网关不可达）就渲染上游原本的 `Input`，对别的 provider 行为一字不变。
 
 
 `patches/apply.sh` 的用法与判据写在脚本头注释里；产物是
