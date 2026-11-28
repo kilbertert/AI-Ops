@@ -72,8 +72,8 @@ code:
     - .github/workflows/cd.yml
     - .github/workflows/cd-watch.yml
     - .github/workflows/gitlab-mirror.yml
-    - .sandcastle/cd-watch.mjs
-    - .sandcastle/deploy-state.mjs
+    - tools/verification/cd-watch.mjs
+    - tools/verification/deploy-state.mjs
     - tests/integrations/test_business_environment_ingress.py
     - tests/tooling/test_m2_live03_bootstrap.py
 ---
@@ -133,12 +133,18 @@ code:
 - 41/36按各自现役组件制品交付；95旧完整栈与专属业务隧道已撤回，不再作为新环境模板。候选目标按项目声明和私有清单解析，先通过`ops/environments/gateway/`预演，不自动切流量。**CD只部署41，其他组件须独立配套**。
 - **环境登记表**（`environment_registry_file`，ADR-0256）：机群级「环境×租户」准入声明——`tools/content/render_business_ingress.py --registry` 以它为地址权威（catalogue 只存 id+凭据，gateway_url 取自登记行；未登记/停用环境拒产 upstream），登录代理启动也把 `gateway_url` 钉到登记行。准入语义（`require`/`TENANT_ENVIRONMENT_NOT_ENABLED`/`RegisteredCallerResolver`）归 [identity-scope](../identity/identity-scope.mdx)。
 - 手工部署台账 `deploy/manual-deploys.md`：任何绕 CD 上生产的动作必须**当日**经 `deploy/record-manual-deploy.sh` 追加——六次连续 CD 失败曾因手工 rsync 保持生产更新而无人察觉（#407）。台账 append-only，永不重写。
-- CD Watch（`.sandcastle/cd-watch.mjs`+`cd-watch.yml`）：每 5min 跑在 **GitHub-hosted** runner（看守者与被看守机器同死就没意义）；经 `pending_deployments` 判 deploy-41 结果（等待与没跑看起来一样）+最近完成 runs；开 `cd:needs-attention` issue 而非报错红——未关的 issue 本身就是警报。
+- CD Watch（`tools/verification/cd-watch.mjs`+`cd-watch.yml`）：每 5min 跑在 **GitHub-hosted** runner（看守者与被看守机器同死就没意义）；经 `pending_deployments` 判 deploy-41 结果（等待与没跑看起来一样）+最近完成 runs；开 `cd:needs-attention` issue 而非报错红——未关的 issue 本身就是警报。
 - **main合并不部署、显式SHA批次发布、注释SemVer标签与该版本Release**（ADR-0348，2026-11-26）；**CD 审批闸已永久移除**（2026-09-30 明确决定）："能合并 main 的人"=="能改生产的人"；Ruleset（PR+必需检查+会话解决）是剩余闸门。回滚方法=给 `production-41` 环境重加 required_reviewers。
 
 ## 失败语义速查
 
-deploy-41 失败 → 生产未更新（远端自检回滚）；release-notes 失败 → 生产已更新，重跑 job 即可；deploy 排队/pending → 查 runner 在线/忙碌+并发锁，别假设"等审批"；**PR 冲突 → pull_request 工作流根本不派发**（先按 sha 查 total_count 证明"没跑"，再谈"慢"）。
+**`deploy-41` 失败不等于生产未变。** 先看失败阶段及远端末尾标记，再决定是否重跑：
+
+- `rollback=restored`：部署脚本已核对服务为 `active`，且 `/health` 返回部署前版本；本次未部署新版本。
+- `rollback=also-failed`、超时或变更阶段没有回滚结果：不能认定生产已恢复。按 [41 运行手册](../../docs/agents/env-41-runbook.md) 先核对 `aiops-gateway-41.service` 状态、`/health` 的实际版本与服务日志，确认现状后再决定是否重跑。
+- 如果日志明确在源码替换和服务重启前被预检拒绝，先修正预检问题，不把它当成一次回滚。
+
+`deploy-41` 成功、仅 `release-notes` 失败 → 生产已更新，只重跑说明作业。部署排队或 `pending` → 查 runner 在线状态和并发锁，不默认是等审批。PR 冲突时先按 SHA 确认 `pull_request` 工作流是否派发。
 
 ## Canonical anchors
 
