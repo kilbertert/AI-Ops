@@ -15,6 +15,11 @@
 > 不事后补写（事后凭 commit 标题重构「用户感知」是编造），历史缺口原样保留。
 > 当前缺口：`1.29.0`–`1.40.0`（截至 2026-11-23）。
 
+## [1.44.1] - 2026-11-28
+
+### Fixed
+- 修复管家端商城结算取数（`MySQLSource.operator_settlement_records`）查询 `qumall_mall.shop_level` 时仅过滤 `deleted_at IS NULL` 漏掉未删除有效行（现网 BIGINT `deleted_at = 0`）的问题，改为 `(deleted_at IS NULL OR deleted_at = 0)`，使规则 1/2/5/6 可按真实店铺等级费率完成确定性算术核验。
+
 ## [1.44.0] - 2026-11-28
 
 ### Added
