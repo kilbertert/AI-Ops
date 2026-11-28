@@ -1085,10 +1085,10 @@ def test_prepare_control_plane_bundle_passes_uuid_request_ids_when_creating_apps
         op_manifest = json.loads(tf.extractfile("runtime/operator-manifest.json").read().decode("utf-8"))
         seed_doc = json.loads(tf.extractfile("runtime/gateway-seed.json").read().decode("utf-8"))
     assert op_manifest["schema"] == "operator-exec-config/1"
-    assert len(op_manifest["tools"]) == 11
+    assert len(op_manifest["tools"]) == 13
     agent_manifest = json.loads(seed_doc["operator_manifest_text"])
     assert agent_manifest["schema"] == "operator-agent/1"
-    assert len(agent_manifest["tools"]) == 11
+    assert len(agent_manifest["tools"]) == 13
     assert seed_doc["key_dir"] == "/var/lib/aiops-access-jiejia/keys"
 
 

@@ -9,7 +9,7 @@ from aiops_diagnostics.common.i18n import localized_pack
 from aiops_diagnostics.common.redaction import redact_text, sanitize_data
 from aiops_diagnostics.consumer.presentation import readable_time
 from aiops_diagnostics.identity.order_identity import is_order_identifier
-from aiops_diagnostics.operator import order_analysis, order_billing, order_pricing
+from aiops_diagnostics.operator import order_analysis, order_billing, order_pricing, order_settlement
 from aiops_diagnostics.operator.operator_conversation import OperatorRefused
 
 SCHEMA = "operator-agent/1"
@@ -28,14 +28,14 @@ order_no可省略以使用已选订单，但仅在用户确实指向该订单时
 先核离线排行/未记录恢复清单，再按用户需求读关联订单；2/3/5均为需关注的状态，重叠不能证明原因。
 可以用上轮真实返回的设备与订单引用继续查询，不能编造对象；未记录恢复不等于实时掉线。
 多笔关联订单而用户未明确单号时先列候选请确认单号，不任选一单；单一关联单可沿用。
-金额使用cpms_order_amount_check，过程统计使用cpms_order_process_stats，读取其依赖的证据后再调用；不要自行反推缺失单价或折扣。
+金额使用cpms_order_amount_check，过程统计使用cpms_order_process_stats，场站结算/抽成/通道费/分佣基数分析先读cpms_order_detail与cpms_order_settlement再调用cpms_order_settlement_check，读取其依赖的证据后再调用；不要自行反推缺失单价、折扣或抽成比例。
 最终直接给自然语言答复，不输出JSON、字段名或技术协议。
 不罗列无关字段、不重复整份后台记录；只引用实际取得的证据。
 根据本轮工具结果准确复述金额、状态、核验项及其限定；可写必要公式、记录值与差额。
 最终答复只使用自然语言，不输出工具路径、字段名、引用占位符或内部协议。
 币种标注本身不影响诊断交付；金额仍沿用来源数值，不自行换汇或改写金额；
-不要把totalAmount当税前结算口径；局部算术相符不等于整单没有多收。
-金额结论以核验工具的conclusion及limitations为准；写“整单计费仍待验证”，不能改成“未发现多收”。
+不要把totalAmount当税前结算口径；局部算术相符不等于整单没有多收，账面结算一致也不等于银行已打款到账或点位奖已发放。
+金额与结算结论以核验工具的conclusion及limitations为准；写“整单计费仍待验证”或对应结算限制，不能改成“未发现多收”或“已打款到账”。
 具体站点名称地址必须来自实际结果，只有真实结果才能声称查到；站名保留原文，不添加猜测译名或别名。
 工具说明中的示例不是本单数据，例如折数换算示例不代表本单享有八折。
 可以解释和追问，但不能反转工具给出的状态、编造事实或声称退款/重启等写操作已执行。
@@ -84,6 +84,9 @@ def analysis(evidence, section):
         result["tariff_notes"] = order_pricing.historical_report(
             evidence["cpms_order_tariff"]["data"], detail, "zh"
         ).splitlines()
+    elif section == "settlement":
+        result = order_settlement.verify(detail, evidence["cpms_order_settlement"]["data"])
+        result["limitations"] = "；".join(result["limitations"])
     elif section == "process":
         samples = (evidence.get("cpms_charging_samples") or {}).get("data") or {}
         if samples.get("records"):
@@ -114,6 +117,8 @@ _SOURCE_LABELS = {
         "cpms_order_tariff": "订单历史计费模板",
         "cpms_order_billing": "订单账务与优惠",
         "cpms_order_amount_check": "订单金额核验",
+        "cpms_order_settlement": "订单商城结算与抽成配置",
+        "cpms_order_settlement_check": "订单结算金额核验",
         "cpms_order_process_stats": "充电过程统计",
         "cpms_charging_timeline": "充电枪时序遥测",
         "cpms_order_communications": "订单窗口事件候选与通讯源状态",
@@ -128,6 +133,8 @@ _SOURCE_LABELS = {
         "cpms_order_tariff": "訂單歷史計費模板",
         "cpms_order_billing": "訂單帳務與優惠",
         "cpms_order_amount_check": "訂單金額核驗",
+        "cpms_order_settlement": "訂單商城結算與抽成配置",
+        "cpms_order_settlement_check": "訂單結算金額核驗",
         "cpms_order_process_stats": "充電過程統計",
         "cpms_site_search": "可見站點查詢",
         "cpms_station_plan": "未來充電費用方案",
@@ -141,6 +148,8 @@ _SOURCE_LABELS = {
         "cpms_order_tariff": "Historical billing template",
         "cpms_order_billing": "Order billing and discounts",
         "cpms_order_amount_check": "Order amount verification",
+        "cpms_order_settlement": "Mall settlement and fee rate records",
+        "cpms_order_settlement_check": "Order settlement amount verification",
         "cpms_order_process_stats": "Charging process statistics",
         "cpms_site_search": "Visible site lookup",
         "cpms_station_plan": "Future charging cost plan",
@@ -173,7 +182,7 @@ def _cpms_citation_snippet(tool: str, data: object) -> str:
                 parts.append(f"{label}={value}")
         if parts:
             return _truncate_snippet("；".join(parts))
-    if tool == "cpms_order_amount_check":
+    if tool in {"cpms_order_amount_check", "cpms_order_settlement_check"}:
         conclusion = safe.get("conclusion")
         if conclusion:
             return _truncate_snippet(str(conclusion))

@@ -388,6 +388,129 @@ class MySQLSource:
             result["payments"] = payments[:15]
             return result
 
+    def operator_settlement_records(
+        self, order_no: str, *, expected_site_id: str | None = None
+    ) -> dict[str, Any] | None:
+        """在单一一致性只读快照内读取管家侧充电订单与商城结算清分及费率配置。
+
+        安全边界（Fail-Closed）：
+        - 仅接受无 ``user_id`` 绑定的管家/租户范围（拒绝 C 端 ``self`` 范围、空范围或无租户范围）；
+        - 先按调用者 ``QueryScope``（租户 + 可见站点，及可选 ``expected_site_id``）锚定
+          ``ch_order_info``，未唯一命中时直接返回空结果，绝不触碰商城库；
+        - 商城查询全部限定 ``tenant_id`` 与已核实的 ``shop_id=site_id``，仅取清分与费率所需字段，
+          不读取商户联系人、手机号或地址等敏感信息。
+
+        返回 ``None`` 表示范围无效或受阻；``{"disabled": True}`` 表示当前环境未配置商城库。
+        """
+        if self.scope is None or not self.scope.tenant_id or self.scope.user_id or self._scope_blocked():
+            return None
+        mall_database = self.settings.mysql.mall_database
+        if not mall_database:
+            return {"disabled": True}
+        mall_db = _safe_identifier(mall_database)
+        scope_where, scope_params = self._scope_where(user_column=None)
+        where = f"order_no=%s AND {scope_where}"
+        params: list[Any] = [order_no, *scope_params]
+        if expected_site_id:
+            where += " AND site_id=%s"
+            params.append(expected_site_id)
+        with self._cursor(consistent_snapshot=True) as cursor:
+            cursor.execute(
+                "SELECT id, order_no, tenant_id, site_id, status, type, launch_type, "
+                "electricity, electricity_fee, service_fee, ds_electric_fee, ds_service_fee, "
+                "launch_fee, park_fee, occupy_fee, insurance_amount, "
+                "vat, vat_fee, total_amount, market_amount, pay_amount, "
+                "refund_amount, refund_status, reduce_balance, "
+                "is_pay, pay_type, sync_mall_order, settlement_type "
+                f"FROM `{self.database}`.`ch_order_info` "
+                f"WHERE {where} LIMIT 2",
+                params,
+            )
+            orders = cursor.fetchall()
+            result: dict[str, Any] = {
+                "charging": _normalize_row(orders[0]) if len(orders) == 1 else None,
+                "charging_rows": len(orders),
+                "site": None,
+                "mall_orders": [],
+                "mall_order_rows": 0,
+                "mall_items": [],
+                "shop": None,
+                "shop_level": None,
+                "truncated": [],
+            }
+            if len(orders) != 1:
+                return result
+            charging = result["charging"]
+            tenant_id, site_id = charging.get("tenant_id"), charging.get("site_id")
+            if not tenant_id or not site_id:
+                return result
+            cursor.execute(
+                "SELECT id, tenant_id, settlement_type "
+                f"FROM `{self.database}`.`ch_site` "
+                "WHERE tenant_id=%s AND id=%s LIMIT 2",
+                [tenant_id, site_id],
+            )
+            sites = cursor.fetchall()
+            if len(sites) == 1:
+                result["site"] = _normalize_row(sites[0])
+            cursor.execute(
+                "SELECT id, tenant_id, shop_id, parent_id, order_no, order_type, order_tag, "
+                "is_pay, status, settlement_status, payment_type, "
+                "total_amount, sales_price, payment_price, paid_amount, refund_amount, "
+                "platform_discount_amount, platform_balance_reduce, "
+                "payment_coupon_price, market_price, shop_balance_reduce, "
+                "sliver_deduct_amount, service_fee, rate_of_payment, fee_of_pay_channel, "
+                "commission_base_amount, actual_commission, settlement_amount, goods_cost_amount, "
+                "payment_time, create_time "
+                f"FROM `{mall_db}`.`order_info` "
+                "WHERE tenant_id=%s AND shop_id=%s AND order_type='11' AND order_no=%s "
+                "AND del_flag='0' ORDER BY create_time DESC, id DESC LIMIT 3",
+                [tenant_id, site_id, order_no],
+            )
+            mall_orders = [_normalize_row(row) for row in cursor.fetchall()]
+            result["mall_order_rows"] = len(mall_orders)
+            result["mall_orders"] = mall_orders[:2]
+            if len(mall_orders) == 1:
+                cursor.execute(
+                    "SELECT id, order_id, sku_code, spu_name, quantity, status, commission_flag, "
+                    "tax_rate, sales_price, payment_price, refund_amount, "
+                    "payment_coupon_price, platform_discount_amount, platform_balance_reduce, "
+                    "shop_balance_reduce, market_price, "
+                    "service_fee, rate_of_payment, commission_base_amount, settlement_amount, "
+                    "goods_cost_price "
+                    f"FROM `{mall_db}`.`order_item` "
+                    "WHERE tenant_id=%s AND order_id=%s AND del_flag='0' "
+                    "ORDER BY sku_code ASC, id ASC LIMIT 31",
+                    [tenant_id, mall_orders[0]["id"]],
+                )
+                items = [_normalize_row(row) for row in cursor.fetchall()]
+                if len(items) > 30:
+                    result["truncated"].append("mall_items")
+                result["mall_items"] = items[:30]
+            cursor.execute(
+                "SELECT id, tenant_id, level_id, configs "
+                f"FROM `{mall_db}`.`shop_info` "
+                "WHERE tenant_id=%s AND id=%s AND del_flag='0' LIMIT 2",
+                [tenant_id, site_id],
+            )
+            shops = cursor.fetchall()
+            if len(shops) == 1:
+                shop = _normalize_row(shops[0])
+                result["shop"] = shop
+                level_id = shop.get("level_id")
+                if level_id:
+                    cursor.execute(
+                        "SELECT id, tenant_id, level_name, settle_fee, "
+                        "rate_of_settle_fee_for_elect, settle_fee_of_elect, config "
+                        f"FROM `{mall_db}`.`shop_level` "
+                        "WHERE tenant_id=%s AND id=%s AND deleted_at IS NULL LIMIT 2",
+                        [tenant_id, level_id],
+                    )
+                    levels = cursor.fetchall()
+                    if len(levels) == 1:
+                        result["shop_level"] = _normalize_row(levels[0])
+            return result
+
     def aggregate_order_statuses(
         self,
         site_ids: tuple[str, ...] | None,

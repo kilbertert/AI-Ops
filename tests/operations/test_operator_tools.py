@@ -38,15 +38,26 @@ def test_the_declaration_covers_the_live_tools():
         "cpms_charging_timeline",
         "cpms_device_offline",
         "cpms_order_communications",
+        "cpms_order_settlement",
+        "cpms_order_settlement_check",
     )
     assert tuple(t.name for t in tools) == expected
     assert all(
         t.model_inputs == ("order_no",)
         for t in tools
-        if t.name in {expected[0], expected[1], expected[3], expected[5], expected[8], expected[10]}
+        if t.name
+        in {
+            expected[0],
+            expected[1],
+            expected[3],
+            expected[5],
+            expected[8],
+            expected[10],
+            expected[11],
+        }
     )
-    # 无模型输入的是两个证据计算工具；按时序工具之后按名判，不再按尾部位置判。
-    assert all(t.model_inputs == () for t in tools if t.name in {expected[6], expected[7]})
+    # 无模型输入的是证据计算工具；按名判，不再按尾部位置判。
+    assert all(t.model_inputs == () for t in tools if t.name in {expected[6], expected[7], expected[12]})
     detail, samples, site, tariff, plan, billing = tools[:6]
     assert billing.request({"order_no": "ORDER-1"})["path"] == "/chOrderInfo/ORDER-1"
     assert detail.kind == "single" and detail.request({"order_no": "ORDER-1"}) == {

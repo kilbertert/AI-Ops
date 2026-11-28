@@ -1,7 +1,7 @@
 # 现行架构决策索引（Active ADR Index）
 
 > **给新接手工程师的 1 分钟导读**：
-> - 本页列出主仓库 `docs/adr/` **当前生效的 128 份核心架构决策**（按领域归类）。想知道「系统为什么这样设计、哪些方案已被否决」，先看本页对应行再点进具体 ADR。
+> - 本页列出主仓库 `docs/adr/` **当前生效的 129 份核心架构决策**（按领域归类）。想知道「系统为什么这样设计、哪些方案已被否决」，先看本页对应行再点进具体 ADR。
 > - 已被取代、反转、撤回、到期，以及单一 PR / 局部 bugfix / 一次性清理的 **231 份历史与战术 ADR**，已依据 [ADR-0370](adr/0370-archive-superseded-and-tactical-adrs.md) 完整性校验后迁出至私有归档仓库 [`kilbertert/AI-Ops-history-archive`](https://github.com/kilbertert/AI-Ops-history-archive/tree/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr)（归档提交 `4bed22cb`）。
 > - 运行现状请读 [当前交付状态](agents/current-delivery-state.md)；Dify 宿主现状请直接看唯一架构入口 [`deploy/dify-36/ARCHITECTURE.md`](../deploy/dify-36/ARCHITECTURE.md)。
 
@@ -125,7 +125,7 @@
 | [ADR-0261](adr/0261-knowledge-environment-namespace.md) | 共享 RAGFlow 知识服务的命名空间身份包含所属业务环境 | Accepted |
 | [ADR-0302](adr/0302-scoped-knowledge-delegation.md) | 跨环境知识能力按应用与既有授权世代委派 | Accepted |
 
-## 五、管家端 (Operator / CPMS) 与运行追踪（12 份）
+## 五、管家端 (Operator / CPMS) 与运行追踪（13 份）
 
 | ADR | 生效核心规则 | 状态备注 |
 |---|---|---|
@@ -141,6 +141,7 @@
 | [ADR-0249](adr/0249-run-log-detail-projection.md) | 运行日志投影扩展涵盖用户问题、订单号与执行步骤明细 | Accepted |
 | [ADR-0251](adr/0251-run-log-tool-summaries-and-readable-trace.md) | 运行日志行级明细：工具入参/出参摘要投影及可人读 trace | Accepted |
 | [ADR-0252](adr/0252-answer-review-observe-only.md) | 管家答复语义复核处于观察记录模式，不阻断诊断交付 | Accepted |
+| [ADR-0374](adr/0374-operator-mall-settlement-verification.md) | 管家端商城结算金额只读取证、6 大清分规则确定性核验与诚实待验证边界 | 已采纳 |
 
 ## 六、多环境开通、版本发布与容器分发（18 份）
 

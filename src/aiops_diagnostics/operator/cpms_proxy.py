@@ -19,6 +19,7 @@ from aiops_diagnostics.operator import (
     operator_agent,
     operator_tools,
     order_pricing,
+    order_settlement,
 )
 from aiops_diagnostics.operator.cpms_evidence import (
     _TIMELINE_DEVICE,
@@ -314,6 +315,7 @@ def proxy_inner(
                 "cpms_order_billing",
                 TIMELINE_TOOL,
                 communication.NAME,
+                order_settlement.SETTLEMENT_TOOL,
             )
             and TOOL_NAMES[0] not in task.delivered
         ):
@@ -321,7 +323,11 @@ def proxy_inner(
         if tool == "cpms_order_billing" and "cpms_order_tariff" not in task.delivered:
             raise OperatorRefused("OPERATOR_TARIFF_REQUIRED")
 
-        if tool in {"cpms_order_amount_check", "cpms_order_process_stats"}:
+        if tool in {
+            "cpms_order_amount_check",
+            "cpms_order_process_stats",
+            order_settlement.SETTLEMENT_CHECK_TOOL,
+        }:
             return _proxy_derived_analysis(service, task, run, tool)
         from aiops_diagnostics.operator import offline_tool
 
@@ -343,7 +349,7 @@ def proxy_inner(
                 },
             }
             return task.evidence[tool]["response"]
-        if tool in ("cpms_order_tariff", "cpms_order_billing"):
+        if tool in ("cpms_order_tariff", "cpms_order_billing", order_settlement.SETTLEMENT_TOOL):
             detail = cpms_get_fn(
                 task.base_url + tool_request(TOOL_NAMES[0], {"order_no": run.order_no})["path"],
                 task.bearer,
@@ -352,6 +358,25 @@ def proxy_inner(
             validate_body(detail, task.caller, run.order_no, TOOL_NAMES[0])
             if detail["data"]["siteId"] != task.order_site_id:
                 raise OperatorRefused("CPMS_SCOPE_MISMATCH")
+        if tool == order_settlement.SETTLEMENT_TOOL:
+            data = order_settlement.query_settlement(service, task, run)
+            task.evidence[tool] = {
+                "tool": tool,
+                "inputs": tool_inputs(tool, run_values(tool, run.order_no, task.arguments.get(tool))),
+                "source": _declared(tool).source,
+                "observed_at": format_stored_time(now_utc()),
+                "data": data,
+                "response": {
+                    "code": 0,
+                    "data": {
+                        "orderNo": run.order_no,
+                        "siteId": task.order_site_id,
+                        "tenantId": task.caller.effective_tenant_id,
+                        "value": data,
+                    },
+                },
+            }
+            return task.evidence[tool]["response"]
         if tool == SITE_TOOL:
 
             def reauthorize() -> str:
@@ -450,17 +475,20 @@ def proxy_inner(
 def _proxy_derived_analysis(service: Any, task: Any, run: Any, tool: str) -> dict[str, Any]:
     if tool == "cpms_order_amount_check":
         required = {"cpms_order_detail", "cpms_order_tariff", "cpms_order_billing"}
+        section = "amount"
+    elif tool == order_settlement.SETTLEMENT_CHECK_TOOL:
+        required = {"cpms_order_detail", order_settlement.SETTLEMENT_TOOL}
+        section = "settlement"
     else:
         required = {"cpms_order_detail"}
+        section = "process"
     if not required <= task.delivered or (
         tool == "cpms_order_process_stats"
         and not ({"cpms_charging_samples", "cpms_charging_timeline"} & task.delivered)
     ):
         raise OperatorRefused("OPERATOR_EVIDENCE_MISSING")
     service._authorized_order(task, run.order_no, expected_site=task.order_site_id)
-    data = operator_agent.analysis(
-        task.evidence, "amount" if tool == "cpms_order_amount_check" else "process"
-    )
+    data = operator_agent.analysis(task.evidence, section)
     data = order_pricing.project(data, _declared(tool).evidence_shape)
     task.evidence[tool] = {
         "tool": tool,

@@ -137,6 +137,31 @@ aiops-admin --config <Gateway配置> ensure-node-provider \
 费用工具读取订单当时快照；分时展示电量不等于独立电表。Gateway按同轮证据生成并冻结
 统计、算式与缺证范围；结果不执行实际收费、退款或后台重算。
 
+### 商城结算金额分析与清分核验
+
+架构决策见 [ADR-0374](../../adr/0374-operator-mall-settlement-verification.md)，可观察验收场景与 QA 计划分别见 [order-settlement-verification.feature](../../acceptance/order-settlement-verification.feature) 和 [order-settlement-verification-qa-plan.md](../../acceptance/order-settlement-verification-qa-plan.md)。
+
+管家端区分「车主应付账单核验」（`cpms_order_billing` + `cpms_order_amount_check`）与
+「场站商城清分结算分析」（`cpms_order_settlement` + `cpms_order_settlement_check`）。
+后者针对充电单完结支付后同步到商城的新能源结算单（`qumall_mall.order_info.order_type='11'` 及
+`order_item` 拆单子项），经 `MySQLSource.operator_settlement_records` 在单一一致性只读快照中读取，
+并受以下边界约束：
+
+- **权限先于商城读取**：先按调用者冻结 `QueryScope`（租户 + 授权站点，拒绝带 `user_id` 的 C 端范围）
+  锚定 `cloud_charging_pile.ch_order_info` 与站点一致性，未命中直接拒绝，绝不跨场站/跨租户查商城库；
+  脱敏输出不含商户手机号、联系人与地址。
+- **结算模式与抽成口径**：读取 `order_item.commission_flag`（兼容历史字段名 `is_commission`）结合 `ch_site`/`ch_order_info.settlement_type`
+  识别电费单独结算（`0`）、整笔订单跟随（`1`）或电费跟随服务费结算（`2`），并按 `Decimal` 四舍五入到分
+  确定性核验 6 类清分规则（订单结算金额、启动费服务费及通道费溢出扣减、实付款一致性、支付通道费分项与合计、
+  平台总服务费、订单分佣基数）。
+- **公司源码定位参考**（不抄录私有源码）：拆单入商城见 `iot/cloud-charging-pile:release:MallOrderServiceImpl.java:386-498`；
+  清分落库见 `s2b2c-java/qumall:release:OrderSettleService.java:48-366` 及 `s2b2c-java/cloud-order:dev:OrderSettleExecutor.java:52-380`；
+  结算宽表聚合见 `s2b2c-java/cloud-order:dev:MotianOrderInfoSettlementService.java:180-355`（核验取用 `sku_code='1'` 子项
+  实际服务费抽成，规避宽表 `serviceAmountServiceFee` 被汇总覆盖的问题）。
+- **明确限制**：商城未保存订单结算时刻的 `shop_level` 历史费率快照，费率取自当前店铺等级配置；
+  含非零停车费/占枪费/其他附加科目、按电量定额抽成（`settleFeeOfElect > 0`）、非零退款、模式冲突或未支付/未同步商城单时，
+  受影响项标为「待验证」而非误报通过或不一致；账面核验一致不证明银行实际打款到账或点位奖已发放。
+
 ### 更新已存在的工具提供方
 
 新增工具时对目标应用运行同一`ensure-node-provider`命令并显式加`--migrate`。

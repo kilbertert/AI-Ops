@@ -61,6 +61,9 @@ FEEDBACK_REFUSALS = {
     "OPERATOR_TARIFF_REQUIRED": "需先调用 cpms_order_tariff 读取计费模板。",
     "OPERATOR_EVIDENCE_MISSING": "需先取得该工具依赖的订单证据再调用。",
     "OPERATOR_SITE_SCOPE_REQUIRED": "当前账号没有可见站点；请如实告知用户。",
+    "OPERATOR_SETTLEMENT_UNAVAILABLE": (
+        "商城结算数据源暂不可用或未配置，请如实告知暂时无法核验商城结算明细，不要编造结算金额。"
+    ),
     "CPMS_INVALID_RESPONSE": "上游返回的数据无法识别；如实告知暂时无法查询，不要编造。",
     "CPMS_SCOPE_MISMATCH": "该订单不在当前账号可见范围或不存在；如实告知查无此单或无权查看。",
 }
@@ -100,6 +103,12 @@ TOOL_SUMMARY_FIELDS = {
     "cpms_charging_timeline": [("total", "记录数"), ("samples_returned", "返回"), ("truncated", "截断")],
     "cpms_device_offline": [("summary", "摘要"), ("window", "窗口")],
     "cpms_order_communications": [("association", "关联"), ("sources", "来源"), ("window_truncated", "截断")],
+    "cpms_order_settlement": [
+        ("settlement_state", "状态"),
+        ("settlement", "结算单"),
+        ("settlement_mode", "模式"),
+    ],
+    "cpms_order_settlement_check": [("conclusion", "结论"), ("checks", "检查"), ("limitations", "限制")],
 }
 
 #: 工具授权契约版本：节点领取授权时必须逐字声明。
