@@ -374,3 +374,20 @@ echo "502"
     # Legacy systemd rollback when migrating from systemd for the first time
     assert "systemctl enable --now aiops-dify-console-bridge.service" in log_txt
     assert "systemctl enable --now aiops-dify-login-proxy.service" in log_txt
+
+
+def test_edge_request_id_is_owned_only_by_nginx_at_the_client_boundary() -> None:
+    snippets = (
+        ROOT / "ops/dify-console-bridge/dify-console-publish.conf",
+        ROOT / "ops/dify-login-proxy/dify-login-proxy.conf",
+    )
+    for snippet in snippets:
+        text = snippet.read_text(encoding="utf-8")
+        locations = text.split("\nlocation ")[1:]
+        assert locations, snippet
+        for location in locations:
+            route = location.splitlines()[0]
+            directives = [line.strip() for line in location.splitlines()[1:]]
+            assert directives.count("proxy_set_header X-Request-Id $request_id;") == 1, route
+            assert directives.count("proxy_hide_header X-Request-Id;") == 1, route
+            assert directives.count("add_header X-Request-Id $request_id always;") == 1, route
