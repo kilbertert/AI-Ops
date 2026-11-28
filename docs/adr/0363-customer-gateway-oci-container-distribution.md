@@ -19,7 +19,7 @@ ADR-0361 收口了已上线客户环境的版本选择、受控 Nginx 入口对�
 
 2. **独立阿里云 ACR 先行，凭单配置无缝切入公司 ACR**
    - 通过配置抽象解耦镜像仓地址与拉取凭据：CI 侧读取仓库变量 `AIOPS_GATEWAY_IMAGE_REPO` 与机密 `AIOPS_ACR_USERNAME` / `AIOPS_ACR_PASSWORD`；控制面 `41` 侧读取 `0600` 私有账本 `/var/lib/aiops-41/onboarding-assets/registry-config.json`（由 `ops/environments/gateway/configure-registry.sh` 安全写入，明文密码永不进入仓库、命令行参数或管理面 API）。
-   - 第一阶段使用独立的国内阿里云 ACR，后续公司运维分配 `qushi-registry.cn-hangzhou.cr.aliyuncs.com` 最小权限推送账号后，仅改 CI 变量与 `41` 的 `registry-config.json` 即可零代码迁移。
+   - 直接启用公司企业版 ACR `qushi-registry.cn-hangzhou.cr.aliyuncs.com/release/aiops-gateway`（依托已开通的受控 RAM 推送账号及客户机既有公司 ACR 预登录态），并保留后续凭单配置切换到任意合规国内 ACR 的零代码迁移能力。
    - **隔离客户机既有 Docker 认证**：当 AI-Ops 需要独立拉取凭据时，仅写入 `/etc/aiops-access-<env>/docker-config/config.json`（目录 `0700`、文件 `0600`、`root` 拥有），通过 `DOCKER_CONFIG` 环境变量注入；**严禁覆盖客户机 `/root/.docker/config.json`**（保留客户既有公司 ACR 认证）。
 
 3. **两层缓存友好镜像（常规升级增量 ~400 KB）**

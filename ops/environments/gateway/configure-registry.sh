@@ -102,20 +102,25 @@ PY
 )
 
 remote_py=$(cat <<'PY'
-import json, os, pwd, sys
+import json, os, sys
 from pathlib import Path
 
 payload = sys.stdin.read()
 doc = json.loads(payload)
 assert doc.get("schema") == "aiops-container-registry/1"
 target = Path("/var/lib/aiops-41/onboarding-assets/registry-config.json")
-target.parent.mkdir(parents=True, exist_ok=True)
-pw = pwd.getpwnam("aiops-41")
-os.chown(target.parent, pw.pw_uid, pw.pw_gid)
+if target.parent.is_dir():
+    st = target.parent.stat()
+    uid, gid = st.st_uid, st.st_gid
+else:
+    var_st = Path("/var/lib/aiops-41").stat()
+    uid, gid = var_st.st_uid, var_st.st_gid
+    target.parent.mkdir(parents=True, exist_ok=True)
+os.chown(target.parent, uid, gid)
 os.chmod(target.parent, 0o700)
 tmp = target.with_suffix(".tmp")
 tmp.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-os.chown(tmp, pw.pw_uid, pw.pw_gid)
+os.chown(tmp, uid, gid)
 os.chmod(tmp, 0o600)
 os.replace(tmp, target)
 print(json.dumps({
@@ -123,6 +128,8 @@ print(json.dumps({
     "registry": doc["registry"],
     "repository": doc["repository"],
     "has_pull_auth": bool(doc.get("pull_username") and doc.get("pull_password")),
+    "uid": uid,
+    "gid": gid,
 }, ensure_ascii=False))
 PY
 )

@@ -15,6 +15,12 @@
 > 不事后补写（事后凭 commit 标题重构「用户感知」是编造），历史缺口原样保留。
 > 当前缺口：`1.29.0`–`1.40.0`（截至 2026-11-23）。
 
+## [1.43.22] - 2026-11-28
+
+### Changed
+- 客户机 Gateway 版本分发由“美国开发机构建 24 MiB 整包经 SCP 跨海传输 + 隔离 `venv` 全量安装”全面升级为 **公司阿里云企业版 ACR（`qushi-registry.cn-hangzhou.cr.aliyuncs.com/release/aiops-gateway`）两层缓存 OCI 容器镜像分发**（锁定不可变 `@sha256:...` 摘要，升级仅拉取轻量化自研代码增量层），并统一覆盖新客户冷装与 Dify「版本与发版」Day-2 滚动升级及双向回滚。
+- 容器以 `--network host`、`--read-only` 与项目专属非 root UID/GID 运行，保持既有 `production.env`、业务配置与客户机 `/root/.docker/config.json` 零改动；历史无镜像版本仍平滑兼容原隔离目录回退。
+
 ## [1.43.21] - 2026-11-27
 
 ### Changed

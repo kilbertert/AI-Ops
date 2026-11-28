@@ -215,6 +215,7 @@ _ALLOWED_ALPHABET_LITERALS = {
     "onboarding/business.py": 4,  # case_ref/设备id/run证据id/节点id；订单字段调用is_order_identifier
     "onboarding/drafts.py": 1,  # 部署目标/凭据逻辑引用，不是订单号
     "onboarding/artifacts.py": 1,  # 冷安装运行工件的租户id，与环境目录合同一致
+    "onboarding/container_registry.py": 4,  # OCI 镜像引用/Registry/仓库路径/slug 白名单，非订单号
     "onboarding/data_preflight.py": 2,  # SQL 库表/用户名标识符与 MySQL 客户端主机白名单，非订单号
     "onboarding/host_enrollment.py": 3,  # 动态客户主机环境/主机名/SSH用户白名单，非订单号
     "onboarding/task_ssh_runner.py": 1,  # 登记资产只读探针的租户编号，与环境目录合同一致
