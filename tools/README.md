@@ -9,8 +9,7 @@
 | 工具 | 用途 | 何时跑 |
 |---|---|---|
 | `verification/doc_impact.py --base <revision>` | 复用llmdoc映射列本次文档影响与未映射路径，只读提示 | 文档/源码变更交付前；负责人核证后更新或说明无影响 |
-| `verification/doc_lifecycle.py check-pr\|audit` | 文档自动减债核心引擎（ADR-0371）：PR 写入门禁/幽灵引用检测，以及全仓墓碑/日落/漂移/GC 不可达体检 | PR 检查与周期性文档体检 |
-| `verification/doc_archive.py --paths-file ... --reason ... [--dry-run\|--apply]` | 一键文档冷归档（ADR-0371）：SHA-256 校验迁入 `AI-Ops-history-archive`、主仓删旧、全仓改写 permalink 与索引同步 | 确认巡检候选清单后执行增量归档 |
+| `fleet-kit@v1` `doc-gc`（通过 `uvx` 或 Reusable Workflow 调用） | 文档自动减债核心引擎与一键冷归档（ADR-0371，已外置至 `kilbertert/fleet-kit@v1` `packages/doc-gc`） | PR 检查、周期体检与确认清单后的增量冷归档 |
 | `content/generate_faq_catalog.py` | 从本地业务 DOCX 生成 `faq_catalog.json` | 内容首次生成 |
 | `content/merge_faq_i18n.py` | 把宽表题面 + 答案 JSON 合并进目录 | 新增语言/内容后 |
 | `content/derive_zh_hant.py` | 由简体权威**派生** `zh-Hant`（opencc `s2twp`） | 改过任何简体文案后 |
