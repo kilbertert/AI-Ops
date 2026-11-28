@@ -109,7 +109,7 @@ cp "$VERSION_DIR/ExternalKnowledgeIdPicker.tsx" \
 # **打完补丁要验它真的进去了。** 上面所有防护都是"让失败变明显"，但没有一条
 # 证明改动真的落到了源里 —— 而这个脚本一旦产出镜像就会上生产。
 # 判据是每个补丁里 `+++ b/` 指到的文件，都得带着一个只有我们才有的标记。
-for marker in "knowledge-sync" "ExternalKnowledgeIdPicker" "useKnowledgeSync" "environment-directory" "aiops-liquid-glass"; do
+for marker in "knowledge-sync" "ExternalKnowledgeIdPicker" "useKnowledgeSync" "environment-directory" "aiops-liquid-glass" "AiopsKnowledgeOpenCard"; do
   if ! grep -rq "$marker" "$WORK/web/app" "$WORK/web/service" 2>/dev/null; then
     echo "FAIL: 补丁没打上（找不到 $marker）—— 拒绝构建" >&2
     exit 1
@@ -117,6 +117,7 @@ for marker in "knowledge-sync" "ExternalKnowledgeIdPicker" "useKnowledgeSync" "e
 done
 echo "ok: 补丁已落进源（全部标记都在）"
 
+cp "$VERSION_DIR/aiops-knowledge-open.tsx" "$WORK/web/app/components/aiops-knowledge-open.tsx"
 cp "$VERSION_DIR/aiops-liquid-glass.tsx" "$WORK/web/app/components/aiops-liquid-glass.tsx"
 cp "$VERSION_DIR/aiops-liquid-glass.css" "$WORK/web/app/styles/aiops-liquid-glass.css"
 cp "$VERSION_DIR/aiops-environments.tsx" "$WORK/web/app/components/aiops-environments.tsx"

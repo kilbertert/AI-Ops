@@ -15,13 +15,12 @@ git -C "$repo" archive "$revision" \
   src/aiops_diagnostics/common/{__init__,async_job_lifecycle,bounded_http,http_auth,order_reference,platform_constants,private_files,endpoint_policy}.py \
   src/aiops_diagnostics/gateway/{__init__,deployment_environment}.py \
   src/aiops_diagnostics/identity/{__init__,order_identity}.py \
-  ops/dify-console-bridge/{dify-publish-button.js,operator-native-preview.js,dify-console-publish.conf,deploy.sh,aiops-dify-console-bridge.service} \
+  ops/dify-console-bridge/{dify-console-publish.conf,deploy.sh,aiops-dify-console-bridge.service} \
   | tar -xf - -C "$work"
 mkdir "$work/bundle"
 mv "$work/services/dify-console-bridge/dify_console_bridge" "$work/bundle/"
 mv "$work/src/aiops_diagnostics" "$work/bundle/"
 mv "$work/ops/dify-console-bridge/"* "$work/bundle/"
-cat "$work/bundle/operator-native-preview.js" >> "$work/bundle/dify-publish-button.js"
 printf '%s\n' "$revision" > "$work/bundle/REVISION"
 (
   cd "$work/bundle"

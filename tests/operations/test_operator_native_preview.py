@@ -2,9 +2,7 @@
 
 import http.client
 import json
-import subprocess
 import threading
-from pathlib import Path
 
 import pytest
 from dify.test_dify_console_publish import (
@@ -19,18 +17,6 @@ from dify.test_dify_console_publish import (
 )
 from dify_console_bridge import bridge as preview
 from dify_console_bridge.bridge import BridgeSettings, make_server
-
-
-def test_native_fetch_and_stop_match_dify_request_shapes():
-    root = Path(__file__).resolve().parents[2]
-    subprocess.run(
-        [
-            "node",
-            str(root / "tests/operator_native_preview.mjs"),
-            str(root / "ops/dify-console-bridge/operator-native-preview.js"),
-        ],
-        check=True,
-    )
 
 
 def test_browser_disconnect_requests_cancellation(bridge, upstream, monkeypatch):

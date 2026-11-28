@@ -15,18 +15,20 @@ diff --git a/web/app/layout.tsx b/web/app/layout.tsx
 index 50f9e133..9ba4c23f 100644
 --- a/web/app/layout.tsx
 +++ b/web/app/layout.tsx
-@@ -17,6 +17,7 @@ import { getLocaleOnServer } from '@/i18n-config/server'
+@@ -17,6 +17,8 @@ import { getLocaleOnServer } from '@/i18n-config/server'
  import { headers } from '@/next/headers'
  import { getApplicationTitle } from '@/utils/document-title'
  import { basePath } from '@/utils/var'
++import { AiopsKnowledgeOpenCard } from './components/aiops-knowledge-open'
 +import { LiquidGlassDefs } from './components/aiops-liquid-glass'
  import { CloudAnalytics } from './components/base/analytics-consent/cloud-analytics'
  import { PartnerStackCookieRecorder } from './components/billing/partner-stack/cookie-recorder'
  import { AgentationLoader } from './components/devtools/agentation-loader'
-@@ -74,6 +75,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
+@@ -74,6 +76,8 @@ export default async function RootLayout({ children }: { children: React.ReactNo
        </head>
        <body className="h-full bg-background-body" {...datasetMap}>
          <CloudAnalytics />
++        <AiopsKnowledgeOpenCard />
 +        <LiquidGlassDefs />
          <div className="isolate h-full">
            <JotaiProvider>
