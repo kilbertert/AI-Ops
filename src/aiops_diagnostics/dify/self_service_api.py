@@ -14,30 +14,7 @@ from aiops_diagnostics.execution.node_publication import NodeRouteConflict
 from . import dual_entry
 from . import self_service_identity as auth
 from .self_service import SelfService
-from .self_service_store import SetupConflict, public_job
-
-
-class SetupSource(BaseModel):
-    """一端的来源：已发布的应用 + 它当前的正式版本号。"""
-
-    model_config = ConfigDict(extra="forbid")
-    app_id: str = Field(pattern=r"^[a-f0-9-]{36}$")
-    version_no: int = Field(ge=1)
-
-
-class SetupRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    request_key: str = Field(pattern=r"^[a-zA-Z0-9_-]{16,80}$")
-    tenant_id: str = Field(pattern=r"^[a-zA-Z0-9_-]{1,64}$")
-    name: str = Field(min_length=1, max_length=128, pattern=r"^[^\x00-\x1f]+$")
-    #: 开通范围。默认双端；只开一端时把另一端从 `sources` 里去掉。
-    scope: str = Field(default="both", pattern=r"^(both|consumer|operator)$")
-    #: 每端一个来源。缺一端且该端在 `scope` 里 ⇒ `SETUP_SOURCE_REQUIRED`。
-    sources: dict[str, SetupSource] = Field(default_factory=dict)
-    #: 旧的单来源字段：它只能表达管家（“复制并开通客户管家”的入参）。保留它既有的
-    #: 调用方逐字可用；两者都给时以 `sources` 为准。
-    source_app_id: str | None = Field(default=None, pattern=r"^[a-f0-9-]{36}$")
-    source_version: int | None = Field(default=None, ge=1)
+from .self_service_store import SetupConflict
 
 
 class AppRequest(BaseModel):
@@ -161,89 +138,31 @@ def register(app, context):
             status_code=409, content={"error": {"code": str(exc)}}, headers={"Cache-Control": "no-store"}
         )
 
-    @app.get("/v1/dify/management/catalogue")
-    def catalogue(session=Depends(session)):  # noqa: B008 - FastAPI dependency
-        caller = auth.identity(context, session)
-        choices = auth.tenants(context, caller) if caller.platform else []
-        allowed = {x["id"] for x in choices} | {caller.tenant_id}
-        if getattr(getattr(context, "settings", None), "environment_registry_file", ""):
-            from aiops_diagnostics.onboarding.registry import RegistryError, for_settings
-
-            try:
-                enabled_tenants = for_settings(context.settings).enabled_tenant_ids()
-            except RegistryError as exc:
-                raise auth.SetupRefused("TENANT_ENVIRONMENT_NOT_ENABLED") from exc
-            choices = [x for x in choices if x["id"] in enabled_tenants]
-            allowed = {x["id"] for x in choices} | (
-                {caller.tenant_id} if caller.tenant_id in enabled_tenants else set()
-            )
-        tenant_names = {row["id"]: row["name"] for row in choices}
-
-        def sources_for(entry):
-            rows = []
-            for route in service.routes.all():
-                if route.entry != entry or not route.active or route.tenant_id not in allowed:
-                    continue
-                if route.scenario != dual_entry.scenario(entry):
-                    continue
-                managed = service.managed(route.app_id)
-                if not managed or managed["entry"] != entry:
-                    continue
-                agent = context.agent_manager.store.get(route.agent_id, route.tenant_id)
-                app_name = service.source_app_name(route.tenant_id, route.app_id, agent.name)
-                tenant_name = tenant_names.get(route.tenant_id, "")
-                # 标签回答的是「这是谁的哪个应用」：来源应用全部住在**客户工作区**里，
-                # 平台账号平时看不到它们，只写智能体名等于给出一个运营无从对照的字符串。
-                rows.append(
-                    {
-                        "app_id": route.app_id,
-                        "tenant_id": route.tenant_id,
-                        "tenant_name": tenant_name,
-                        "app_name": app_name,
-                        "name": f"{tenant_name} / {app_name}" if tenant_name else app_name,
-                        "version_no": route.agent_version_no,
-                    }
-                )
-            return rows
-
-        entries = [
-            {
-                "entry": entry,
-                "label": dual_entry.label(entry),
-                "scenario": dual_entry.scenario(entry),
-                "sources": sources_for(entry),
-            }
-            for entry in dual_entry.ENTRIES
-        ]
-        return {
-            "platform": caller.platform,
-            "tenants": choices,
-            # 顶层 `sources` 保持管家端（既有前端不改也能跑）；读取方优先读 `entries`。
-            "sources": next(item["sources"] for item in entries if item["entry"] == "operator"),
-            "entries": entries,
-            "workspaces": [
-                {
-                    "workspace_id": r["workspace_id"],
-                    "tenant_id": r["tenant_id"],
-                    "name": next((t["name"] for t in choices if t["id"] == r["tenant_id"]), r["tenant_id"]),
-                }
-                for r in context.dify_workspaces.list_for_environment(context.settings.environment)
-                if r["tenant_id"] in allowed and r["setup_state"] in {"ready", "created"}
-            ],
-            "operations": [public_job(r) for r in service.store.recent(caller.user_id)],
-        }
-
     @app.post("/v1/dify/management/workspace")
     def workspace(payload: WorkspaceRequest, session=Depends(session)):  # noqa: B008
         caller = auth.identity(context, session)
-        tenant = service.workspace(caller, payload.workspace_id)
-        return {"tenant_id": tenant, "workspace_id": payload.workspace_id, "platform": caller.platform}
+        tenant, env = service.workspace_scope(caller, payload.workspace_id)
+        return {
+            "tenant_id": tenant,
+            "environment": env,
+            "workspace_id": payload.workspace_id,
+            "platform": caller.platform,
+        }
 
     @app.post("/v1/dify/management/workspace/member")
     def member(payload: MemberRequest, session=Depends(session)):  # noqa: B008
         caller = auth.identity(context, session)
-        tenant = service.workspace(caller, payload.workspace_id)
-        auth.require_target(context, caller, tenant)
+        if "workspace" in vars(service):
+            resolved = service.workspace(caller, payload.workspace_id)
+            tenant, env = (
+                resolved if isinstance(resolved, tuple) else (resolved, context.settings.environment)
+            )
+        else:
+            tenant, env = service.workspace_scope(caller, payload.workspace_id)
+        if env == context.settings.environment:
+            auth.require_target(context, caller, tenant)
+        else:
+            auth.require_environment_manager(context, caller, env)
         from aiops_diagnostics.common.bounded_http import ErrorMapping, RequestSpec, json_body, request_json
 
         from .dify_inner_api import DifyInnerApi, InnerApiSettings
@@ -278,7 +197,7 @@ def register(app, context):
             raise auth.SetupRefused("SETUP_IDENTITY_MISMATCH")
         grant_tenant_access(
             tenant_id=tenant,
-            environment=context.settings.environment,
+            environment=env,
             workspaces=context.dify_workspaces,
             inner=DifyInnerApi(
                 InnerApiSettings(
@@ -288,7 +207,7 @@ def register(app, context):
             account_id=payload.account_id,
             email=payload.email,
         )
-        return {"workspace_id": payload.workspace_id}
+        return {"workspace_id": payload.workspace_id, "environment": env}
 
     @app.post("/v1/dify/management/status")
     def status(payload: AppRequest, session=Depends(session)):  # noqa: B008 - FastAPI dependency
@@ -301,6 +220,15 @@ def register(app, context):
     def readiness(payload: AppRequest, session=Depends(session)):  # noqa: B008 - FastAPI dependency
         caller = auth.identity(context, session)
         row = service.authorize_app(caller, payload.app_id)
+        if service.is_remote_app(row):
+            env_name, _tenant_name = auth.environment_display(context, row["environment"], row["tenant_id"])
+            return {
+                "can_diagnose": False,
+                "reason": (
+                    f"跨环境编辑模式：支持编辑与发布/回滚至 {env_name}；"
+                    "带真实订单的预览试运行请在对应业务环境执行"
+                ),
+            }
         if caller.tenant_id != row["tenant_id"]:
             return {"can_diagnose": False, "reason": "请使用该客户的公司账号预览订单"}
         from aiops_diagnostics.operator.operator_cpms import OperatorRefused
@@ -318,66 +246,16 @@ def register(app, context):
 
     @app.post("/v1/dify/management/knowledge")
     def knowledge(payload: AppRequest, session=Depends(session)):  # noqa: B008
-        from aiops_diagnostics.consumer.consumer_knowledge import owned_libraries
-
-        row = service.authorize_app(auth.identity(context, session), payload.app_id)
-        if row["entry"] != "consumer":
-            raise auth.SetupRefused("SETUP_SOURCE_NOT_CONSUMER")
-        try:
-            libraries = owned_libraries(context.runtime, row["tenant_id"], row["app_id"])
-        except ValueError as exc:
-            raise auth.SetupRefused("SETUP_KNOWLEDGE_FAILED") from exc
-        return {
-            "libraries": [
-                {
-                    "id": r["knowledge_base_id"],
-                    "name": r.get("name") or r["knowledge_base_id"],
-                    "allowed": r["audience"] == "customer",
-                }
-                for r in libraries
-            ]
-        }
+        return service.knowledge(auth.identity(context, session), payload.app_id)
 
     @app.post("/v1/dify/management/knowledge/access")
     def knowledge_access(payload: KnowledgeAccessRequest, session=Depends(session)):  # noqa: B008
-        from aiops_diagnostics.consumer.knowledge_access import KnowledgeGrants
-
-        libraries = knowledge(AppRequest(app_id=payload.app_id), session)
-        if payload.knowledge_base_id not in {r["id"] for r in libraries["libraries"]}:
-            raise auth.SetupRefused("SETUP_KNOWLEDGE_CROSS_TENANT")
-        caller = auth.identity(context, session)
-        row = service.authorize_app(caller, payload.app_id)
-        grants = KnowledgeGrants(context.settings.database_file)
-        scope = row["tenant_id"], context.settings.execution_environment, payload.knowledge_base_id
-        if payload.allowed:
-            grants.grant(*scope, caller.user_id)
-        else:
-            grants.revoke(*scope)
-        return {
-            "id": payload.knowledge_base_id,
-            "allowed": payload.knowledge_base_id in grants.granted(*scope[:2]),
-        }
-
-    @app.post("/v1/dify/management/operations", status_code=202)
-    def create(payload: SetupRequest, session=Depends(session)):  # noqa: B008 - FastAPI dependency
-        caller = auth.identity(context, session)
-        job = service.create(caller, payload)
-        service.enqueue(job["id"], session)
-        return public_job(service.store.get(job["id"]))
-
-    @app.get("/v1/dify/management/operations/{job_id}")
-    def get(job_id: str, session=Depends(session)):  # noqa: B008 - FastAPI dependency
-        caller = auth.identity(context, session)
-        row = service.store.get(job_id)
-        if row is None or row["actor"] != caller.user_id:
-            raise auth.SetupRefused("SETUP_OPERATION_NOT_FOUND")
-        return public_job(row)
-
-    @app.post("/v1/dify/management/operations/{job_id}/retry", status_code=202)
-    def retry(job_id: str, session=Depends(session)):  # noqa: B008 - FastAPI dependency
-        get(job_id, session)
-        service.enqueue(job_id, session)
-        return public_job(service.store.get(job_id))
+        return service.set_knowledge_access(
+            auth.identity(context, session),
+            payload.app_id,
+            payload.knowledge_base_id,
+            payload.allowed,
+        )
 
     @app.post("/v1/dify/management/publish")
     def publish(payload: PublishRequest, session=Depends(session)):  # noqa: B008 - FastAPI dependency

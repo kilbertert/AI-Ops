@@ -111,3 +111,91 @@ def require_target(context, caller, tenant_id):
         except RegistryError as exc:
             raise SetupRefused("TENANT_ENVIRONMENT_NOT_ENABLED") from exc
     return found
+
+
+def management_registry_path(context) -> str:
+    settings = getattr(context, "settings", None)
+    return str(
+        getattr(settings, "environment_management_registry_file", "")
+        or getattr(settings, "environment_registry_file", "")
+        or ""
+    ).strip()
+
+
+def manager_allowed_environments(context, caller: ManagerIdentity) -> set[str]:
+    """返回发起人在控制面环境目录中被显式授权管理的环境集合（非显式 manager 返回空集）。"""
+    path = management_registry_path(context)
+    if not path:
+        return set()
+    from aiops_diagnostics.onboarding import registry as env_registry
+
+    try:
+        doc = env_registry.load(path)
+    except Exception:  # noqa: BLE001 - 目录异常一律 fail-closed
+        return set()
+    control_env = str(getattr(context.settings, "environment", "") or "")
+    allowed: set[str] = set()
+    for row in doc.get("managers") or []:
+        if (
+            isinstance(row, dict)
+            and row.get("environment") == control_env
+            and row.get("tenant_id") == caller.tenant_id
+            and row.get("user_id") == caller.user_id
+        ):
+            for env_id in row.get("environments") or []:
+                if isinstance(env_id, str) and env_id:
+                    allowed.add(env_id)
+    return allowed
+
+
+def require_environment_manager(context, caller: ManagerIdentity, environment: str) -> dict:
+    """校验发起人是否有权跨环境管理目标环境，并返回该环境在控制面目录中的登记行。"""
+    allowed = manager_allowed_environments(context, caller)
+    if "*" not in allowed and environment not in allowed:
+        raise SetupRefused("ENVIRONMENT_MANAGEMENT_FORBIDDEN")
+    path = management_registry_path(context)
+    if not path:
+        raise SetupRefused("ENVIRONMENT_MANAGEMENT_UNAVAILABLE")
+    from aiops_diagnostics.onboarding import registry as env_registry
+
+    try:
+        doc = env_registry.load(path)
+    except Exception as exc:  # noqa: BLE001
+        raise SetupRefused("ENVIRONMENT_MANAGEMENT_UNAVAILABLE") from exc
+    entry = next(
+        (
+            row
+            for row in (doc.get("environments") or [])
+            if isinstance(row, dict) and row.get("id") == environment
+        ),
+        None,
+    )
+    if entry is None:
+        raise SetupRefused("ENVIRONMENT_MANAGEMENT_FORBIDDEN")
+    return entry
+
+
+def environment_display(context, environment: str, tenant_id: str) -> tuple[str, str]:
+    """查询环境名与租户名用于 Dify 发布条防呆展示；读不到时平稳退回原编号。"""
+    path = management_registry_path(context)
+    if not path:
+        return environment, tenant_id
+    from aiops_diagnostics.onboarding import registry as env_registry
+
+    try:
+        doc = env_registry.load(path)
+    except Exception:  # noqa: BLE001
+        return environment, tenant_id
+    for row in doc.get("environments") or []:
+        if isinstance(row, dict) and row.get("id") == environment:
+            env_name = str(row.get("name") or environment)
+            tenant_name = next(
+                (
+                    str(t.get("name") or tenant_id)
+                    for t in (row.get("tenants") or [])
+                    if isinstance(t, dict) and str(t.get("id") or "") == tenant_id
+                ),
+                tenant_id,
+            )
+            return env_name, tenant_name
+    return environment, tenant_id

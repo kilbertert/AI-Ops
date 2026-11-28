@@ -242,6 +242,48 @@ class DifyWorkspaces:
             )
         return _identifier(str(rows[0]["tenant_id"] or ""), "tenant_id")
 
+    def entry_for_workspace(self, workspace_id: str) -> dict[str, str]:
+        """仅按 ``workspace_id`` 跨环境反查唯一归属 ``(tenant_id, environment)``（ADR-0372）。
+
+        专供单控制面跨环境管理使用；调用方必须另行核验发起人对返回 ``environment`` 的管理权限。
+        """
+        workspace_id = _identifier(workspace_id, "workspace_id")
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT tenant_id, environment, setup_state FROM dify_workspaces WHERE workspace_id = ?",
+                (workspace_id,),
+            ).fetchall()
+        if not rows:
+            raise DifyWorkspaceError(
+                DIFY_WORKSPACE_UNRESOLVED,
+                f"没有找到 workspace {workspace_id}",
+                http_status=404,
+            )
+        if len(rows) > 1:
+            raise DifyWorkspaceError(
+                DIFY_WORKSPACE_AMBIGUOUS,
+                f"workspace {workspace_id} 对应多条环境记录，拒绝选择",
+                http_status=409,
+            )
+        state = str(rows[0]["setup_state"])
+        if state not in {"created", "ready"}:
+            code = {
+                "creating": DIFY_WORKSPACE_CREATING,
+                "failed": DIFY_WORKSPACE_FAILED,
+            }.get(state, DIFY_WORKSPACE_UNKNOWN)
+            raise DifyWorkspaceError(
+                code,
+                f"workspace {workspace_id} 的状态是 {state}，还不能使用",
+                http_status=409,
+                retryable=state == "creating",
+            )
+        return {
+            "tenant_id": _identifier(str(rows[0]["tenant_id"] or ""), "tenant_id"),
+            "environment": _identifier(str(rows[0]["environment"] or ""), "environment"),
+            "workspace_id": workspace_id,
+            "setup_state": state,
+        }
+
     def list_for_environment(self, environment: str) -> list[dict[str, Any]]:
         """Every workspace row in one environment, for the triple check (#927).
 

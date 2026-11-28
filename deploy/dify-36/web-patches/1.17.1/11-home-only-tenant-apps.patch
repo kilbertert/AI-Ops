@@ -41,7 +41,7 @@
  import { workspacePermissionKeysAtom } from '@/context/permission-state'
  import { systemFeaturesQueryOptions } from '@/features/system-features/client'
  import { useImportDSL } from '@/hooks/use-import-dsl'
-@@ -38,9 +33,7 @@
+@@ -37,9 +32,7 @@
  import { HomeBanner } from '../banner/home-banner'
  import { HomeIntro } from '../home-intro'
  import { HomeShell } from '../home-shell'
@@ -51,7 +51,7 @@
  
  const TryApp = dynamic(() => import('@/app/components/explore/try-app'), { ssr: false })
  const CreateAppModal = dynamic(() => import('@/app/components/explore/create-app-modal'), {
-@@ -54,24 +47,17 @@
+@@ -53,24 +46,17 @@
  const HOME_STEP_BY_STEP_TOUR_TASK_ID = 'home' satisfies StepByStepTourTaskId
  
  export function HomeContent() {
@@ -84,7 +84,7 @@
    const canCreateApp = hasPermission(workspacePermissionKeys, 'app.create_and_management')
    const activeStepByStepTourTaskId = useAtomValue(activeStepByStepTourTaskIdAtom)
    const activeStepByStepTourGuideIndex = useAtomValue(activeStepByStepTourGuideIndexAtom)
-@@ -109,42 +95,6 @@
+@@ -108,42 +94,6 @@
      [canCreateApp],
    )
  
@@ -127,7 +127,7 @@
    const [currApp, setCurrApp] = useState<RecommendedAppResponse | null>(null)
    const [isShowCreateModal, setIsShowCreateModal] = useState(false)
  
-@@ -251,10 +201,6 @@
+@@ -250,10 +200,6 @@
        hideTryAppPanel()
      }
    }, [currentTryApp, hideTryAppPanel, homeTryAppCreateGuideActive, isShowCreateModal])
@@ -138,7 +138,7 @@
    const handleTryAppFromLearnDify = useCallback(
      (app: RecommendedAppResponse) => {
        isCurrentTryAppFromLearnDifyRef.current = true
-@@ -307,14 +253,6 @@
+@@ -306,14 +252,6 @@
      setCurrApp(app)
      setIsShowCreateModal(true)
    }, [])
@@ -153,7 +153,7 @@
    const trackCurrentCreateApp = useCallback((appMode?: string | null) => {
      const currentCreateAppTracking = currentCreateAppTrackingRef.current
      const resolvedAppMode = appMode ?? currentCreateAppModeRef.current
-@@ -418,32 +356,6 @@
+@@ -416,32 +354,6 @@
            onCreate={handleCreateFromLearnDify}
            onTry={handleTryAppFromLearnDify}
          />

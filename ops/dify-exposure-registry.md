@@ -40,7 +40,6 @@
 | 中央现场预检任务 | `/v1/dify/management/environment-tasks` | POST | 发布服务key＋活动公司会话＋显式环境授权 | 按冻结计划发起、按环境查看、回读/安全取消；只由独立受管执行端取证，不安装或激活；不接受浏览器提交结果 |
 | 环境自助开通向导（V2） | `/v1/dify/management/environment-wizard` | POST | 发布服务key＋活动公司会话＋显式目录授权 | 受控白名单动作（双模式主机引导、自动环境发现、二次确认白名单库修复、全栈基建与免 JSON 验收），零明文密码持久化（ADR-0357） |
 | 业务环境准入维护 | `/v1/dify/management/environments` | POST | 同上，预期目录版本 | 仅名称/准入更新；拒绝URL、路径、管理员和新租户注入 |
-| 平台客户与来源目录 | `/v1/dify/management/catalogue` | GET | 发布服务key＋正常Dify公司会话 | 平台权限与公司绑定客户目录交集，只返回可管理客户及来源 |
 | 管家管理状态 | `/v1/dify/management/status` | POST | 同上，校验app租户归属 | 返回实际模型和正式版本；非受管应用不启用 |
 | 当前账号可用性 | `/v1/dify/management/readiness` | POST | 同上，当前公司身份 | 返回自身站点范围是否可用，不读取订单 |
 | 管家运行日志列表 | `/v1/dify/management/run-logs` | POST | 发布服务key＋同源Dify会话与应用访问权＋当前公司本人权限 | 有界分页读取当前应用本人的Java运行元数据，刷新权限，不返回业务快照或答案 |
@@ -50,9 +49,6 @@
 | 客户端预览停止 | `/v1/dify/management/trial/cancel` | POST | 同上＋同主体与来源app | 撤销本轮取数并落取消终态，不操作公司业务数据 |
 | 本客户知识库目录 | `/v1/dify/management/knowledge` | POST | 发布服务key＋正常公司Dify会话＋app归属 | 仅本客户库名与对客授权状态，不返回正文 |
 | 知识对客授权 | `/v1/dify/management/knowledge/access` | POST | 同上，另核对库归属 | 显式允许或关闭消费者访问，默认内部，不改公司业务数据 |
-| 创建开通任务 | `/v1/dify/management/operations` | POST | 同上，仅平台管理且目标在公司目录 | 创建可恢复开通任务，模型/工具/工作区由后台准备，不写公司业务数据 |
-| 查询开通进度 | `/v1/dify/management/operations/{job_id}` | GET | 同上，操作发起人一致 | 回读自己的任务，不返回凭据 |
-| 重试开通任务 | `/v1/dify/management/operations/{job_id}/retry` | POST | 同上，重新校验目标授权 | 同一幂等任务续跑，不重复创建应用 |
 | 发布当前管家 | `/v1/dify/management/publish` | POST | 同上，app归属与草稿摘要/revision | 冻结当前保存草稿；原子推进路由与来源登记 |
 | 管家历史版本 | `/v1/dify/management/versions` | POST | 同上，app归属 | 只列当前应用的版本 |
 | 撤回或恢复管家 | `/v1/dify/management/version` | POST | 同上，版本归属与revision | 显式变更当前正式指针，保留历史与审计 |

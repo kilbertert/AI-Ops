@@ -594,7 +594,18 @@ def prepare_control_plane_bundle(
     }
     _ensure_workspace_record(dify_db_path, tenant_id, env, workspace_id, actor)
     KnowledgeGrants(dify_db_path).grant(tenant_id, env, consumer_kb_id, actor)
-    SelfServiceStore(dify_db_path).register(
+    store_ctrl = SelfServiceStore(dify_db_path)
+    store_ctrl.register(
+        app_id=op_app_id,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        agent_name=f"operator-{env}",
+        profile_id=f"operator-{env}",
+        actor=actor,
+        entry="operator",
+        environment=env,
+    )
+    store_ctrl.register(
         app_id=con_app_id,
         tenant_id=tenant_id,
         workspace_id=workspace_id,

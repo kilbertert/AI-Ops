@@ -1,36 +1,19 @@
-"""双端开通生命周期：公共准备一次，两端各自准备、发布与对账。
+"""受管智能体生命周期：工作区授权、状态核对、受管发布、版本撤回/恢复与知识授权。
 
-## 形状
+支持单控制面跨环境管理（ADR-0372）：
+- 本环境应用（`environment == settings.execution_environment`）直接读写控制面本地 `gateway.db`；
+- 远端独立客户机环境应用（如 `jiejia`）仅允许控制面目录中显式授权的 `managers` 操作，
+  所有状态读取、发布、回滚与知识库授权均经 `remote_app_management` 读写客户机 `gateway.db`。
 
-一次开通 = 一段**公共准备** + 每个端各自的准备：
-
-```
-workspace → knowledge → dependencies        （公共，只做一次）
-   └─ consumer:  application → key → register → publish
-   └─ operator:  application →      register → publish
-```
-
-公共准备只做一次，是因为它准备的是**客户空间**（工作区、RAGFlow 空间、模型凭据、节点
-provider），两端共用同一个空间；每端再各自准备自己的应用、凭据和正式指针。这样"只开一端"
-不是"少跑一半流程"，而是"这一段本来就属于端"。
-
-## 两端不是同一个事务
-
-一端失败时另一端继续，整体状态是 `partial`，重试只续跑失败的那一端。把它们绑成一个事务，
-等于让"客户端凭据被上游限流"顺手把已经成功的管家回滚掉 —— 而回滚外部资源是不可靠的
-（Dify 应用删掉可以，工作区/知识空间不行），所以宁可如实报告部分完成。
-
-## 已存在正式版时只建草稿
-
-目标客户已经有该端正式应用时，开通**只建草稿**（`draft_only`），原正式版继续服务；
-只有客户主动发布才推进指针。这条不是保守，是规划里明确的业务要求：复制不能自动替换
-正在服务的那一版。
+旧版 `/apps` 顶栏「复制并开通客户 AI 服务」异步任务流已按 ADR-0372 彻底退役，
+新客户环境开通统一收敛至 `/aiops/environments` 5 步向导。
 """
 
+from __future__ import annotations
+
+import hashlib
 import json
 import threading
-import time
-import uuid
 from dataclasses import asdict
 from pathlib import Path
 
@@ -41,20 +24,15 @@ from aiops_diagnostics.execution.agent_runs import AgentRunStore
 from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
 from aiops_diagnostics.publication.agent_manifest import admin_context
 
-from . import dual_entry, service_keys
+from . import dual_entry, remote_app_management, service_keys
 from . import self_service_config as config
 from . import self_service_identity as auth
 from . import self_service_prepare as prepare
 from .dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
 from .dify_dsl_pull import DifyDslSource, _declared_dataset_ids
 from .dify_run_store import DifyRunStore
-from .dify_workspaces import DifyWorkspaces
+from .dify_workspaces import DIFY_WORKSPACE_UNRESOLVED, DifyWorkspaceError, DifyWorkspaces
 from .self_service_store import SelfServiceStore, SetupConflict
-
-#: 来源应用在 Dify 里的名字几乎不变，而「工作室」每打开一次就会拉一次目录。缓存的是
-#: **已经决定要显示的**标签（含兜底）：Dify 慢或不可用时，失败本身也被缓存，避免每次
-#: 打开工作室都撞一轮超时。
-_APP_NAME_TTL_SECONDS = 120.0
 
 
 class SelfService:
@@ -67,47 +45,21 @@ class SelfService:
         )
         self.routes = ChatRouteBindingStore(self.settings.database_file)
         self.lock = threading.RLock()
-        self.enqueued = set()
-        self._app_names: dict[str, tuple[float, str]] = {}
-
-    # ── 队列 ──────────────────────────────────────────────────────────
-
-    def enqueue(self, job_id, session):
-        with self.lock:
-            if job_id in self.enqueued:
-                return
-            self.store.pending(job_id)
-            self.enqueued.add(job_id)
-
-        def execute():
-            try:
-                self.run(job_id, session)
-            finally:
-                with self.lock:
-                    self.enqueued.discard(job_id)
-
-        try:
-            self.context.runtime._executor.submit(execute)
-        except Exception:
-            with self.lock:
-                self.enqueued.discard(job_id)
-            raise
 
     # ── 受管应用目录 ──────────────────────────────────────────────────
 
-    def managed(self, app_id):
-        """这个 Dify 应用是不是受管的；是就返回目录行（含端与场景）。
+    def is_remote_app(self, row: dict) -> bool:
+        env = str(row.get("environment") or "").strip()
+        return bool(env) and env != str(self.settings.execution_environment)
 
-        三处来源按顺序：受管目录本身 → 现役管家 profile 推导 → 现役客户端注册表推导。
-        后两处是**纳管**：现役客户的应用在页面开通之前就在服务，它们不该因为"没走过
-        新流程"而变成不可管理；推导出来的行与真实登记同形，后续发布照常写库。
-        """
+    def managed(self, app_id: str):
+        """判断 Dify 应用是否受管，并返回登记行（含端、场景与所属环境）。"""
         row = self.store.app(app_id)
         if row:
             return row
         return self._adopt_operator(app_id) or self._adopt_consumer(app_id)
 
-    def _adopt_operator(self, app_id):
+    def _adopt_operator(self, app_id: str):
         binding = config.app_binding(self.settings, app_id)
         t = node_publication.target_for(self.settings, binding) if binding else None
         if not t or t.entry != "operator":
@@ -138,7 +90,7 @@ class SelfService:
             "targets_json": "{}",
         }
 
-    def _adopt_consumer(self, app_id):
+    def _adopt_consumer(self, app_id: str):
         """现役客户端应用：注册表里有绑定、且管理表里有一条 active 的客户端路由。"""
         from aiops_diagnostics.dify.dify_app_registry import DifyAppRegistry
 
@@ -181,32 +133,53 @@ class SelfService:
             "targets_json": json.dumps(targets, ensure_ascii=False, sort_keys=True),
         }
 
-    def authorize_app(self, caller, app_id):
+    def authorize_app(self, caller, app_id: str):
         row = self.managed(app_id)
         if row is None:
             raise auth.SetupRefused("SETUP_APP_NOT_MANAGED")
+        if self.is_remote_app(row):
+            auth.require_environment_manager(self.context, caller, row["environment"])
+            return row
         if row["tenant_id"] != caller.tenant_id:
             auth.require_target(self.context, caller, row["tenant_id"])
         return row
 
-    def workspace(self, caller, workspace_id):
-        tenant = DifyWorkspaces(self.settings.database_file).tenant_for_workspace(
-            workspace_id, self.settings.environment
-        )
+    def workspace_scope(self, caller, workspace_id: str) -> tuple[str, str]:
+        """校验发起人是否有权进入指定 Dify 工作区，返回 `(tenant_id, environment)`。"""
+        spaces = DifyWorkspaces(self.settings.database_file)
+        try:
+            tenant = spaces.tenant_for_workspace(workspace_id, self.settings.environment)
+        except DifyWorkspaceError as exc:
+            if exc.code == DIFY_WORKSPACE_UNRESOLVED and auth.management_registry_path(self.context):
+                entry = spaces.entry_for_workspace(workspace_id)
+                auth.require_environment_manager(self.context, caller, entry["environment"])
+                return entry["tenant_id"], entry["environment"]
+            raise
         if tenant != caller.tenant_id:
             auth.require_target(self.context, caller, tenant)
-        return tenant
+        return tenant, self.settings.environment
 
-    def adopt_draft(self, caller, app_id):
+    def workspace(self, caller, workspace_id: str) -> str:
+        """兼容入口：返回工作区所属租户编号。"""
+        return self.workspace_scope(caller, workspace_id)[0]
+
+    def adopt_draft(self, caller, app_id: str) -> bool:
         """本租户原生副本沿用已开通的连接；应用内容仍经发布器校验。"""
-        workspace_id = DifyWorkspaces(self.settings.database_file).resolve(
-            caller.tenant_id, self.settings.environment
-        )
+        try:
+            workspace_id = DifyWorkspaces(self.settings.database_file).resolve(
+                caller.tenant_id, self.settings.environment
+            )
+        except DifyWorkspaceError:
+            return False
         doc = self.console._call(workspace_id, "/console/api/apps/" + app_id)
         mc = doc.get("model_config") or {}
         if not any(t.get("provider_name") == "cpms-node" for t in mc.get("agent_mode", {}).get("tools", [])):
             return False
-        configured = {r["profile_id"] for r in self.store.apps() if r["tenant_id"] == caller.tenant_id}
+        configured = {
+            r["profile_id"]
+            for r in self.store.apps()
+            if r["tenant_id"] == caller.tenant_id and not self.is_remote_app(r)
+        }
         if len(configured) != 1 or _declared_dataset_ids(mc):
             raise auth.SetupRefused("SETUP_APP_NOT_MANAGED")
         profile_id = configured.pop()
@@ -230,53 +203,30 @@ class SelfService:
 
     # ── 正式指针 ──────────────────────────────────────────────────────
 
-    def route(self, tenant):
-        """管家端的正式路由。保留这个名字：既有调用方问的就是"管家走哪一版"。"""
+    def route(self, tenant: str):
+        """管家端的正式路由。"""
         return self.route_for(tenant, "operator")
 
-    def route_for(self, tenant, entry):
+    def route_for(self, tenant: str, entry: str):
         return self.routes.get(self.settings.execution_environment, tenant, entry, dual_entry.scenario(entry))
-
-    # ── 来源标签 ──────────────────────────────────────────────────────
-
-    def source_app_name(self, tenant_id, app_id, fallback):
-        """来源应用在 **Dify** 里叫什么 —— 运营认得的是这个名字。
-
-        目录里的 ``name`` 曾经取 Gateway 的智能体名（``ops-methodology-700``、
-        ``operator-<app_id>``）。那是执行侧标识：它既不是 Dify 应用名，也不出现在任何
-        工作室列表里，于是「来源版本」下拉里出现了两个运营「从来没见过、也不知道属于谁」
-        的条目。这里改读 Dify 控制台自己的应用名，读不到就退回智能体名 —— 读名失败只降级
-        标签，不挡住开通入口。
-        """
-        now = time.monotonic()
-        cached = self._app_names.get(app_id)
-        if cached and cached[0] > now:
-            return cached[1]
-        name = ""
-        try:
-            workspace_id = DifyWorkspaces(self.settings.database_file).resolve(
-                tenant_id, self.settings.environment
-            )
-            if workspace_id:
-                payload = self.console._call(workspace_id, "/console/api/apps/" + app_id)
-                if isinstance(payload, dict):
-                    name = str(payload.get("name") or "").strip()
-        except Exception:  # noqa: BLE001 - 读名失败只降级标签
-            name = ""
-        label = name[:128] or fallback
-        self._app_names[app_id] = (now + _APP_NAME_TTL_SECONDS, label)
-        return label
 
     # ── 状态 ──────────────────────────────────────────────────────────
 
-    def status(self, caller, app_id):
-        # 客户端的登记行**没有** profile（`profile_id=''`）：profile 是管家端的节点目标。
-        # 判"这是不是客户端"只能看这条登记的**真实端**。2026-10-31 实测：一条被错误登记成
-        # 管家端的客户端行让 `config.profiles()['']` 抛 KeyError，客户在页面上看客户端状态
-        # 一律 500，且双端开通因"来源端不符"被拒。
+    def status(self, caller, app_id: str):
         row = self.authorize_app(caller, app_id)
+        if self.is_remote_app(row):
+            return remote_app_management.remote_status(self, caller, row)
+        env_name, tenant_name = auth.environment_display(
+            self.context, self.settings.environment, row["tenant_id"]
+        )
         if row["entry"] != "operator":
-            return self._consumer_status(caller, row)
+            return {
+                **self._consumer_status(caller, row),
+                "environment": self.settings.environment,
+                "environment_name": env_name,
+                "tenant_name": tenant_name,
+                "remote_managed": False,
+            }
         if not row["profile_id"]:
             raise auth.SetupRefused("SETUP_APP_NOT_MANAGED")
         profile = config.profiles(self.settings)[row["profile_id"]]
@@ -291,7 +241,7 @@ class SelfService:
             ).snapshot
             manifest = json.loads(snapshot["node_manifest"])
             published_prompt = node_publication.business_prompt(manifest["system_messages"][0])
-            published_tools = [t["name"] for t in manifest["tools"]]
+            published_tools = [item["name"] for item in manifest["tools"]]
         return {
             "published_prompt": published_prompt,
             "published_tools": published_tools,
@@ -306,6 +256,10 @@ class SelfService:
             "route_revision": route.revision if route else 0,
             "profile": profile["name"],
             "channel": self._channel_state(row["tenant_id"], "operator")["state"],
+            "environment": self.settings.environment,
+            "environment_name": env_name,
+            "tenant_name": tenant_name,
+            "remote_managed": False,
         }
 
     def _consumer_status(self, caller, row):
@@ -355,7 +309,6 @@ class SelfService:
             "live_billing_record": bool(targets.get("live_billing_record")),
             "channel": channel["state"],
             "channel_note": channel["note"],
-            # 页面把它原样发回发布请求：发布冻结的必须是操作者看到的那一份。
             "draft_sha256": draft_sha256,
             "readiness": dual_entry.readiness(
                 {"app_id": row["app_id"], "published": published, "state": ""}, channel
@@ -369,10 +322,6 @@ class SelfService:
         )
 
     def _channel_state(self, tenant_id: str, entry: str) -> dict:
-        """渠道状态的唯一组装点：声明行是显式裁决，无声明时用真实流量推导。
-
-        声明行在场就不查库——它可能是人工压回 ``pending`` 的标记，流量证据不能推翻。
-        """
         declared = self._channels()
         if (tenant_id, entry) in declared:
             return dual_entry.channel_state(declared, tenant_id, entry)
@@ -381,398 +330,69 @@ class SelfService:
         )
 
     def _channel_observed(self, tenant_id: str, entry: str) -> bool:
-        """这条端有没有一条真实成功运行。观测失败按未接入显示，与声明缺省同方向。"""
         try:
             if entry == "operator":
-                # 管家端诊断落 agent_runs，租户在 scope_json.caller.tenant_id。
                 return AgentRunStore(self.settings.database_file).has_succeeded_for_tenant(tenant_id)
             return DifyRunStore(self.settings.database_file).has_succeeded_for_tenant(tenant_id)
         except Exception:  # noqa: BLE001 - fail-closed：查不出来按未接入显示
             return False
 
-    # ── 创建 ──────────────────────────────────────────────────────────
+    # ── 知识库授权 ────────────────────────────────────────────────────
 
-    def create(self, caller, payload):
-        tenant = auth.require_target(self.context, caller, payload.tenant_id)
-        existing = self.store.request(caller.user_id, payload.request_key)
-        if existing:
-            frozen = json.loads(existing["request_json"])
-            if _identity(frozen) != _identity_of(payload):
-                raise SetupConflict("SETUP_REQUEST_CHANGED")
-            return existing
-
-        entries, chosen = _requested_entries(payload)
-        request = {
-            "tenant_id": tenant["id"],
-            "tenant_name": tenant["name"],
-            "name": payload.name,
-            "scope": dual_entry.scope_for_entries(entries),
-            "entries": list(entries),
-            "sources": {},
-        }
-        for entry in entries:
-            spec = chosen[entry]
-            source = self.authorize_app(caller, spec.app_id)
-            if source["entry"] != entry:
-                # 一端的应用不能改个标签当另一端：来源必须**本来就是**这个端。
-                # 页面只显示一个错误码，所以这里按"这一端有没有已发布来源"分两种：
-                # 该租户没有这一端的应用（需要先有来源）→ APP_NOT_MANAGED；
-                # 有这一端的应用但拿它当另一端用 → SOURCE_NOT_PUBLISHED。
-                same_tenant = [r for r in self.store.apps() if r["tenant_id"] == source["tenant_id"]]
-                if not any(r["entry"] == entry for r in same_tenant):
-                    raise auth.SetupRefused("SETUP_SOURCE_NOT_AVAILABLE")
-                raise auth.SetupRefused("SETUP_SOURCE_NOT_PUBLISHED")
-            route = self.route_for(source["tenant_id"], entry)
-            if not route or not route.active or route.app_id != spec.app_id:
-                raise auth.SetupRefused("SETUP_SOURCE_NOT_PUBLISHED")
-            if route.agent_version_no != spec.version_no:
-                raise SetupConflict("SETUP_SOURCE_CHANGED")
-            request["sources"][entry] = self._freeze_source(entry, source, route)
-        return self.store.create(caller.user_id, payload.request_key, request)
-
-    def _freeze_source(self, entry, source, route):
-        """把来源**已发布快照**冻进请求：之后来源再改也不影响这次开通。"""
-        snapshot = self.context.agent_manager.store.version(
-            route.agent_id, route.tenant_id, route.agent_version_no
-        ).snapshot
-        if entry == "operator":
-            manifest = json.loads(snapshot["node_manifest"])
-            prompt = node_publication.business_prompt(manifest["system_messages"][0])
-            return {
-                "app_id": source["app_id"],
-                "version_no": route.agent_version_no,
-                "profile_id": source["profile_id"],
-                "prompt": prompt,
-                "tools": [t["name"] for t in manifest["tools"]],
-            }
-        from aiops_diagnostics.consumer.consumer_publication import flags_of, workflow_of
-
-        workflow = snapshot.get("workflow")
-        if not isinstance(workflow, dict) or not snapshot.get("workflow_id"):
+    def knowledge(self, caller, app_id: str):
+        row = self.authorize_app(caller, app_id)
+        if row["entry"] != "consumer":
             raise auth.SetupRefused("SETUP_SOURCE_NOT_CONSUMER")
-        return {
-            "app_id": source["app_id"],
-            "version_no": route.agent_version_no,
-            "workspace_id": source["workspace_id"],
-            "workflow_id": snapshot["workflow_id"],
-            "graph_sha256": workflow_of(workflow),
-            "flags": flags_of(workflow),
-        }
-
-    # ── 执行 ──────────────────────────────────────────────────────────
-
-    def run(self, job_id, session):
-        owner = str(uuid.uuid4())
-        if not self.store.claim(job_id, owner):
-            return
-        row = self.store.get(job_id)
-        request = json.loads(row["request_json"])
-        resources = json.loads(row["resources_json"])
-        step = row["step"]
-        # 上一轮留下的定位信息属于**那一次**失败。不清掉的话，这一次在别处失败时页面会把
-        # 上一次的位置当成这一次的 —— 那种"看起来有信息"比没有信息更坏。
-        resources.pop("failed_step", None)
-        resources.pop("failure_kind", None)
-
-        def save(next_step):
-            nonlocal step
-            step = next_step
-            self.store.save(job_id, owner, step=step, resources=resources)
+        if self.is_remote_app(row):
+            return remote_app_management.remote_knowledge(self, caller, row)
+        from aiops_diagnostics.consumer.consumer_knowledge import owned_libraries
 
         try:
-            caller = auth.identity(self.context, session)
-            if caller.user_id != row["actor"]:
-                raise auth.SetupRefused("SETUP_ACTOR_CHANGED")
-            auth.require_target(self.context, caller, request["tenant_id"])
-            self._prepare_common(request, resources, save)
-            entries = request["entries"]
-            for entry in entries:
-                state = resources.setdefault("entries", {}).setdefault(
-                    entry, {"state": "pending", "error_code": ""}
-                )
-                if state.get("state") == "ready":
-                    continue  # 重试续跑：已完成端不重复创建、不重复发布
-                # 这一端上次的定位信息同理作废：它描述的是上一次，不是这一次。
-                state.pop("failed_step", None)
-                state.pop("failure_kind", None)
-                try:
-                    if entry == "operator":
-                        self._run_operator(job_id, request, resources, state, save, caller, session)
-                    else:
-                        self._run_consumer(job_id, request, resources, state, save, caller, session)
-                except Exception as exc:  # noqa: BLE001 - 逐端记录，不牵连另一端
-                    state.update(
-                        state="failed",
-                        error_code=_error_code(exc),
-                        failed_step=step,
-                        failure_kind=_failure_kind(exc),
-                    )
-                    _log_failure(job_id, request["tenant_id"], entry, step, exc)
-                    save(entry + ":failed")
-            failed = [e for e in entries if resources["entries"][e].get("state") == "failed"]
-            done = [e for e in entries if resources["entries"][e].get("state") in {"ready", "draft"}]
-            _mirror(resources, request["entries"])
-            if not failed:
-                self.store.save(job_id, owner, step="complete", resources=resources, state="completed")
-            elif done:
-                self.store.save(
-                    job_id,
-                    owner,
-                    step="complete",
-                    resources=resources,
-                    state="partial",
-                    error="SETUP_PARTIAL",
-                )
-            else:
-                self.store.save(
-                    job_id,
-                    owner,
-                    step=step,
-                    resources=resources,
-                    state="failed",
-                    error=resources["entries"][failed[0]]["error_code"] or "SETUP_STEP_FAILED",
-                )
-        except Exception as exc:
-            # 只保留固定业务码，供应商响应可能含凭据。
-            code = str(exc) if isinstance(exc, (auth.SetupRefused, SetupConflict)) else "SETUP_STEP_FAILED"
-            resources["failed_step"] = step
-            resources["failure_kind"] = _failure_kind(exc)
-            _log_failure(job_id, request["tenant_id"], "job", step, exc)
-            self.store.save(job_id, owner, step=step, resources=resources, state="failed", error=code)
-
-    def _prepare_common(self, request, resources, save):
-        """客户空间的**公共**准备：工作区、知识空间、知识连接。
-
-        模型/插件/节点 provider **不在这里**：它们属于端。只开客户端时去装管家用的
-        `cpms-node` provider，会让"客户端的开通"依赖一个它根本不需要的外部动作 ——
-        而那个动作失败时，页面会显示"客户端开通失败"，指向一个与它无关的原因。
-        """
-        if not resources.get("workspace_id"):
-            resources["workspace_id"] = prepare.workspace(
-                self.settings, request["tenant_id"], request["tenant_name"], self.console
-            )
-        save("knowledge")
-        prepare.knowledge(self.context, request["tenant_id"])
-        resources["knowledge_api_id"] = prepare.knowledge_connection(
-            self.context, resources["workspace_id"], self.console
-        )
-        resources["knowledge_ready"] = True
-        return None
-
-    def _profile(self, request):
-        profiles = config.profiles(self.settings)
-        wanted = (request.get("sources", {}).get("operator") or {}).get("profile_id")
-        if wanted and wanted in profiles:
-            return profiles[wanted]
-        # 只开客户端时也要装模型/插件：客服应用和管家共用一个工作区里的模型凭据。
-        return next(iter(profiles.values()))
-
-    def _run_operator(self, job_id, request, resources, state, save, caller, session):
-        spec = request["sources"]["operator"]
-        workspace_id = resources["workspace_id"]
-        save("operator:dependencies")
-        provider = prepare.dependencies(
-            self.console, workspace_id, self._profile(request), self.settings.public_base_url
-        )
-        resources["provider_id"] = provider
-        save("operator:application")
-        if not state.get("app_id"):
-            state["app_id"] = prepare.create_app(
-                self.console,
-                workspace_id,
-                job_id,
+            libraries = owned_libraries(self.context.runtime, row["tenant_id"], row["app_id"])
+        except ValueError as exc:
+            raise auth.SetupRefused("SETUP_KNOWLEDGE_FAILED") from exc
+        return {
+            "libraries": [
                 {
-                    "name": request["name"],
-                    "prompt": spec["prompt"],
-                    "tools": spec["tools"],
-                },
-                self._profile(request),
-                provider,
-            )
-            save("operator:application")
-        app = self.console._call(workspace_id, "/console/api/apps/" + state["app_id"])
-        mc = app["model_config"]
-        expected = {
-            "pre_prompt": spec["prompt"],
-            "agent_mode": {
-                "tools": [
-                    {"provider_id": provider, "provider_type": "api", "tool_name": name, "enabled": True}
-                    for name in spec["tools"]
-                ]
-            },
-        }
-        frozen_draft = draft_fingerprint(expected)
-        if draft_fingerprint(mc) != frozen_draft or _declared_dataset_ids(mc):
-            raise SetupConflict("SETUP_DRAFT_CHANGED")
-        candidate_target = node_publication.managed_target(
-            self.settings, spec["profile_id"], state["app_id"], request["tenant_id"]
-        )
-        node_publication.candidate(
-            DifyDslSource(
-                self.settings.dify_console_base_url,
-                state["app_id"],
-                self.settings.dify_console_api_key,
-                workspace_id,
-            ),
-            candidate_target,
-        )
-        DifyWorkspaces(self.settings.database_file).mark_ready(
-            request["tenant_id"], self.settings.environment
-        )
-        save("operator:register")
-        self.store.register(
-            app_id=state["app_id"],
-            tenant_id=request["tenant_id"],
-            workspace_id=workspace_id,
-            agent_name="operator-" + state["app_id"],
-            profile_id=spec["profile_id"],
-            actor=caller.user_id,
-            entry="operator",
-            environment=self.settings.execution_environment,
-        )
-        save("operator:publish")
-        caller = auth.identity(self.context, session)
-        auth.require_target(self.context, caller, request["tenant_id"])
-        current = self.route(request["tenant_id"])
-        if current is None:
-            outcome = self.publish(caller, state["app_id"], 0, frozen_draft)
-            state.update(version_no=outcome["version_no"], published=True)
-        elif current.app_id == state["app_id"]:
-            # 上次发布成功但完成回执丢失：只对账，不撤销后续人工撤回或切版。
-            state.update(version_no=current.agent_version_no, published=current.active)
-        else:
-            state.update(published=False, draft_only=True)
-        state.update(state="ready" if state.get("published") else "draft", error_code="")
-
-    def _run_consumer(self, job_id, request, resources, state, save, caller, session):
-        from aiops_diagnostics.consumer.consumer_publication import workflow_of
-        from aiops_diagnostics.dify.dify_dsl_pull import DifyDslClient, workflow_content
-
-        spec = request["sources"]["consumer"]
-        workspace_id = resources["workspace_id"]
-        # 第一步之前就要有一个**属于客户端**的步骤名。否则来源导出/校验失败时，
-        # `failed_step` 还停在上一个端或公共准备那一步 —— 页面会把排障引到错误的位置。
-        save("consumer:source")
-        source = DifyDslSource(
-            self.settings.dify_console_base_url,
-            spec["app_id"],
-            self.settings.dify_console_api_key,
-            spec["workspace_id"],
-        )
-        document = yaml.safe_load(DifyDslClient(source).export_dsl(workflow_id=spec["workflow_id"]))
-        if not isinstance(document, dict) or "workflow" not in document:
-            raise auth.SetupRefused("SETUP_SOURCE_NOT_CONSUMER")
-        # 来源在本轮期间改过 ⇒ 冻结的那份与现在能导出的不是同一份，拒绝而不是"按现在的来"。
-        current = workflow_of(workflow_content(yaml.safe_dump(document, allow_unicode=True)))
-        if current != spec["graph_sha256"]:
-            raise SetupConflict("SETUP_SOURCE_CHANGED")
-        # 客户端的**实际依赖**在这里就位并回读：业务连接、知识插件与目录凭据、源编排用到的
-        # 每个模型。只复制 DSL 而说"资源就绪"，等于把问题推到客户第一次提问的时候。
-        save("consumer:dependencies")
-        if state.get("app_id"):
-            state["key_ref"] = service_keys.ensure(
-                self.console,
-                self.settings.chat_dify_key_dir,
-                workspace_id,
-                state["app_id"],
-                database=self.settings.database_file,
-            )
-        else:
-            service_keys.storage_ready(self.settings.chat_dify_key_dir)
-        state["business_endpoint"] = prepare.consumer_endpoint(self.context, request["tenant_id"])
-        from aiops_diagnostics.consumer.knowledge_access import catalogue_token
-
-        token = catalogue_token(
-            self.settings.internal_token_secret,
-            self.settings.environment,
-            workspace_id,
-        )
-        state["plugin"] = prepare.consumer_plugin(self.console, workspace_id, self.settings, token, document)
-        state["models"] = prepare.consumer_models(
-            self.console, workspace_id, document, self._profile(request)
-        )
-        forbidden = ()
-        if not _same_tenant(spec.get("workspace_id"), workspace_id):
-            forbidden = prepare.consumer_source_ids(document)
-        # 已确认来源与依赖可用后再分配客户库；后续失败仍由同一任务续跑。
-        if not state.get("knowledge_base_ids"):
-            state["knowledge_base_ids"] = [
-                prepare.customer_knowledge_base(self.context, request["tenant_id"], state, save)
+                    "id": r["knowledge_base_id"],
+                    "name": r.get("name") or r["knowledge_base_id"],
+                    "allowed": r["audience"] == "customer",
+                }
+                for r in libraries
             ]
-            # 显式登记这一次新建的库"允许对客"。没有这一行，发布契约与检索都会把它当内部库。
-            from aiops_diagnostics.consumer.knowledge_access import KnowledgeGrants
-
-            grants = KnowledgeGrants(self.settings.database_file)
-            for knowledge_base_id in state["knowledge_base_ids"]:
-                grants.grant(
-                    request["tenant_id"],
-                    self.settings.execution_environment,
-                    knowledge_base_id,
-                    caller.user_id,
-                )
-            save("consumer:knowledge")
-        document = prepare.rebind_knowledge(document, state["knowledge_base_ids"], forbidden_ids=forbidden)
-        document.setdefault("app", {})["name"] = request["name"]
-        if not state.get("app_id"):
-            state["app_id"] = prepare.copy_consumer_app(
-                self.console, source, workspace_id, job_id, {"name": request["name"]}, document
-            )
-            save("consumer:application")
-        save("consumer:key")
-        state["key_ref"] = service_keys.ensure(
-            self.console,
-            self.settings.chat_dify_key_dir,
-            workspace_id,
-            state["app_id"],
-            database=self.settings.database_file,
-        )
-        targets = {
-            "knowledge_base_ids": list(state["knowledge_base_ids"]),
-            **spec["flags"],
-            "photo_enabled": False,
         }
-        save("consumer:register")
-        self.store.register(
-            app_id=state["app_id"],
-            tenant_id=request["tenant_id"],
-            workspace_id=workspace_id,
-            agent_name="consumer-" + state["app_id"],
-            profile_id="",
-            actor=caller.user_id,
-            entry="consumer",
-            environment=self.settings.execution_environment,
-            targets=targets,
-        )
-        save("consumer:publish")
-        caller = auth.identity(self.context, session)
-        auth.require_target(self.context, caller, request["tenant_id"])
-        current = self.route_for(request["tenant_id"], "consumer")
-        if current is None:
-            outcome = self.publish(caller, state["app_id"], 0)
-            state.update(version_no=outcome["version_no"], published=True)
-        elif current.app_id == state["app_id"]:
-            # 指针已经是这个应用：**只对账，不推进**。`active=False` 是"客户主动撤回了"，
-            # 不是"上次没发成功" —— 重试把它改回 active 等于替客户撤销了一个决定。
-            state.update(
-                version_no=current.agent_version_no,
-                published=current.active,
-                retracted=not current.active,
+
+    def set_knowledge_access(self, caller, app_id: str, knowledge_base_id: str, allowed: bool):
+        row = self.authorize_app(caller, app_id)
+        if row["entry"] != "consumer":
+            raise auth.SetupRefused("SETUP_SOURCE_NOT_CONSUMER")
+        if self.is_remote_app(row):
+            return remote_app_management.remote_set_knowledge_access(
+                self, caller, row, knowledge_base_id, allowed
             )
+        from aiops_diagnostics.consumer.knowledge_access import KnowledgeGrants
+
+        libraries = self.knowledge(caller, app_id)
+        if knowledge_base_id not in {r["id"] for r in libraries["libraries"]}:
+            raise auth.SetupRefused("SETUP_KNOWLEDGE_CROSS_TENANT")
+        grants = KnowledgeGrants(self.settings.database_file)
+        scope = row["tenant_id"], self.settings.execution_environment, knowledge_base_id
+        if allowed:
+            grants.grant(*scope, caller.user_id)
         else:
-            state.update(published=False, draft_only=True)
-        channel = self._channel_state(request["tenant_id"], "consumer")
-        state.update(
-            state="ready" if state.get("published") else "draft",
-            error_code="",
-            channel=channel["state"],
-            channel_note=channel["note"],
-        )
+            grants.revoke(*scope)
+        return {
+            "id": knowledge_base_id,
+            "allowed": knowledge_base_id in grants.granted(*scope[:2]),
+        }
 
     # ── 发布 ──────────────────────────────────────────────────────────
 
-    def publish(self, caller, app_id, revision, expected_draft=None):
+    def publish(self, caller, app_id: str, revision: int, expected_draft=None):
         with self.lock:
             row = self.authorize_app(caller, app_id)
+            if self.is_remote_app(row):
+                return remote_app_management.remote_publish(self, caller, row, revision, expected_draft)
             if row["entry"] == "consumer":
                 from aiops_diagnostics.consumer.agent_contract import ConsumerFlowError
 
@@ -844,16 +464,16 @@ class SelfService:
             )
             return {"version_no": outcome.version_no, "action": outcome.action, "app_id": app_id}
 
-    def _publish_consumer(self, caller, row, revision, expected_draft=None):
-        """客户端发布：冻结编排 → 推进正式指针 → 回读凭据与知识库。
-
-        推进指针这一步**复用控制台发布那条路径**（`gateway_api._advance_route_binding`），
-        而不是在这里再写一份：那条路径里的三条前置拒绝（凭据目录、聊天地址、文件登记冲突）
-        每一条都对应一次"发布了但跑不起来"，复制一份就等于让两边慢慢长歪。
-        """
-        from aiops_diagnostics.consumer import consumer_publication
+    def _publish_consumer(self, caller, row, revision: int, expected_draft=None):
+        from aiops_diagnostics.consumer import consumer_documents, consumer_publication
+        from aiops_diagnostics.consumer.consumer_knowledge import owned_libraries
         from aiops_diagnostics.dify.dify_app_registry import DifyAppBinding
-        from aiops_diagnostics.dify.dify_dsl_pull import sync_workflow_from_dify
+        from aiops_diagnostics.dify.dify_dsl_pull import (
+            DifyDslClient,
+            sync_workflow_from_dify,
+            workflow_content,
+        )
+        from aiops_diagnostics.publication.route_advancement import advance_route_binding
 
         targets = json.loads(row.get("targets_json") or "{}")
         binding = DifyAppBinding(row["tenant_id"], "consumer", row["app_id"], row["agent_name"])
@@ -866,22 +486,13 @@ class SelfService:
             self.settings.dify_console_api_key,
             row["workspace_id"],
         )
-        # 受管目标没有内容文件，所以它只支持**动态知识回答**（文案与判定在代码里）。
-        # 这不是猜测：读应用自己的编排，缺模式就直接拒绝，而不是在发布时才报一句
-        # 谁都看不懂的"内容文件缺失"。
-        from aiops_diagnostics.consumer import consumer_documents
-        from aiops_diagnostics.dify.dify_dsl_pull import DifyDslClient, workflow_content
-
         document = yaml.safe_load(DifyDslClient(source).export_dsl())
         workflow = workflow_content(yaml.safe_dump(document, allow_unicode=True))
         if not consumer_documents.enabled(workflow):
             raise auth.SetupRefused("SETUP_CONSUMER_CONTENT_REQUIRED")
-        # 发布冻结的是**操作者确认过的那一份**。摘要由 `status` 给出（页面读到什么就发回
-        # 什么），发布时再算一次：中间被另一个标签页改过就拒绝，而不是把别人的内容发出去。
         if expected_draft is not None and expected_draft != consumer_publication.workflow_of(workflow):
             raise SetupConflict("SETUP_DRAFT_CHANGED")
-        # 凭据先就位：发布只推路径，而一条指向不存在文件的路径等于"发布了也跑不起来"。
-        key_ref = service_keys.ensure(
+        service_keys.ensure(
             self.console,
             self.settings.chat_dify_key_dir,
             row["workspace_id"],
@@ -889,8 +500,6 @@ class SelfService:
             database=self.settings.database_file,
         )
         settings = consumer_publication.frozen_settings(target, documents=True)
-        from aiops_diagnostics.consumer.consumer_knowledge import owned_libraries
-
         bootstrap = consumer_publication.bootstrap_config(settings["knowledge_base_ids"], targets)
         outcome = sync_workflow_from_dify(
             self.context.agent_manager,
@@ -908,8 +517,6 @@ class SelfService:
         )
         if outcome.action == "refused":
             raise auth.SetupRefused("SETUP_AGENT_UNAVAILABLE")
-        from aiops_diagnostics.publication.route_advancement import advance_route_binding
-
         advance_route_binding(
             self.context,
             outcome,
@@ -917,8 +524,6 @@ class SelfService:
             initiator=(caller.user_id, "", ""),
             expected_revision=revision,
         )
-        if outcome.workflow_id and key_ref:
-            pass  # 路径已由 `_advance_route_binding` 写入正式指针
         self.context.store.record_publish_audit(
             app_id=row["app_id"],
             action="published",
@@ -935,8 +540,10 @@ class SelfService:
 
     # ── 版本 ──────────────────────────────────────────────────────────
 
-    def versions(self, caller, app_id):
+    def versions(self, caller, app_id: str):
         row = self.authorize_app(caller, app_id)
+        if self.is_remote_app(row):
+            return remote_app_management.remote_versions(self, caller, row)
         agent = next(
             (
                 a
@@ -955,9 +562,11 @@ class SelfService:
             ).fetchall()
         return [v["version_no"] for v in versions if json.loads(v["snapshot_json"]).get("app_id") == app_id]
 
-    def change_version(self, caller, app_id, revision, version=None):
+    def change_version(self, caller, app_id: str, revision: int, version=None):
         with self.lock:
             row = self.authorize_app(caller, app_id)
+            if self.is_remote_app(row):
+                return remote_app_management.remote_change_version(self, caller, row, revision, version)
             current = self.route_for(row["tenant_id"], row["entry"])
             if not current or current.app_id != app_id or current.revision != revision:
                 raise SetupConflict("SETUP_ROUTE_CHANGED")
@@ -1044,122 +653,7 @@ class SelfService:
             }
 
 
-def _requested_entries(payload):
-    """这次开通要做哪几端，以及各端的来源。
-
-    `sources` 是新的形状（每端一个来源）。只有旧的单来源字段时按**管家**处理 ——
-    那个字段本来也只能表达管家：它是「复制并开通客户管家」的入参。
-    """
-    sources = getattr(payload, "sources", None) or {}
-    if sources:
-        entries = dual_entry.entries_for_scope(payload.scope)
-        missing = [entry for entry in entries if entry not in sources]
-        if missing:
-            raise auth.SetupRefused("SETUP_SOURCE_REQUIRED")
-        return entries, sources
-    if not payload.source_app_id or payload.source_version is None:
-        raise auth.SetupRefused("SETUP_SOURCE_REQUIRED")
-    entries = ("operator",)
-    return entries, {"operator": _LegacySource(payload.source_app_id, payload.source_version)}
-
-
-class _LegacySource:
-    __slots__ = ("app_id", "version_no")
-
-    def __init__(self, app_id, version_no):
-        self.app_id = app_id
-        self.version_no = version_no
-
-
-def _identity(frozen):
-    return {
-        "tenant_id": frozen["tenant_id"],
-        "name": frozen["name"],
-        "sources": {
-            entry: [spec["app_id"], spec["version_no"]]
-            for entry, spec in (frozen.get("sources") or {}).items()
-        },
-    }
-
-
-def _identity_of(payload):
-    sources = getattr(payload, "sources", None) or {}
-    if sources:
-        return {
-            "tenant_id": payload.tenant_id,
-            "name": payload.name,
-            "sources": {entry: [spec.app_id, spec.version_no] for entry, spec in sources.items()},
-        }
-    return {
-        "tenant_id": payload.tenant_id,
-        "name": payload.name,
-        "sources": {"operator": [payload.source_app_id, payload.source_version]},
-    }
-
-
-def _same_tenant(source_workspace, target_workspace):
-    return bool(source_workspace) and source_workspace == target_workspace
-
-
-def _error_code(exc):
-    from .dify_console_admin import ConsoleApiError
-
-    if isinstance(exc, ConsoleApiError) and exc.code in {
-        "DIFY_PLUGIN_VERSION_CONFLICT",
-        "DIFY_PLUGIN_PACKAGE_MISSING",
-        "DIFY_PLUGIN_INSTALL_INCOMPLETE",
-        "DIFY_PLUGIN_INSTALL_FAILED",
-        "DIFY_PLUGIN_INSTALL_TIMEOUT",
-        "DIFY_CONSOLE_UNREACHABLE",
-        "DIFY_CREDENTIAL_INVALID",
-    }:
-        return exc.code
-    if isinstance(exc, (auth.SetupRefused, SetupConflict, dual_entry.DualEntryError)):
-        return str(exc)
-    return "SETUP_STEP_FAILED"
-
-
-#: 页面能看到**步骤与异常种类**，看不到异常正文。
-#:
-#: 为什么不是正文：这一层接的是供应商响应与资源操作，异常文本里可能是 URL、app id、
-#: 甚至凭据片段（`service_keys` 的文档明说"供应商响应可能含凭据"）。一次失败要在事后
-#: 可定位，靠的是"在哪一步、哪一类"，不是把上游原文贴到页面上。
-#:
-#: 为什么异常种类不够、还必须有步骤：`KeyError('prompt')` 与 `KeyError('model_config')`
-#: 是同一种异常、两个完全不同的缺陷；只有种类时会去翻整条链。步骤名是代码自己写的
-#: 固定字面量（`save("consumer:key")` 那些），不是外部输入，所以它可以直接给页面。
-def _failure_kind(exc):
-    return type(exc).__name__[:64]
-
-
-def _log_failure(job_id, tenant_id, entry, step, exc):
-    """把栈写进 journal。值仍是固定业务码 —— 栈本身可能含上游原文，只进日志不进任务行。"""
-    import logging
-    import traceback
-
-    logging.getLogger("aiops.dify_self_service").warning(
-        "setup_step_failed job=%s tenant=%s entry=%s step=%s kind=%s\n%s",
-        job_id,
-        tenant_id,
-        entry,
-        step,
-        _failure_kind(exc),
-        "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
-    )
-
-
-def _mirror(resources, entries):
-    """顶层三个字段镜像管家端（没有管家端时镜像第一个已选端），供既有页面读取。"""
-    states = resources.get("entries") or {}
-    primary = states.get("operator") or (states.get(entries[0]) if entries else None) or {}
-    resources["app_id"] = primary.get("app_id")
-    resources["version_no"] = primary.get("version_no")
-    resources["published"] = bool(primary.get("published"))
-
-
-def draft_fingerprint(mc):
-    import hashlib
-
+def draft_fingerprint(mc) -> str:
     body = {
         "pre_prompt": mc.get("pre_prompt"),
         "tools": [

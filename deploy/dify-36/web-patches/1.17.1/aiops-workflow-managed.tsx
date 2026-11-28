@@ -123,13 +123,27 @@ export function WorkflowManagedStrip({
       setBusy(false)
     }
   }
+  const envBadge = status.environment_name
+    ? status.tenant_name && status.tenant_name !== status.environment_name
+      ? `${status.environment_name} · ${status.tenant_name}`
+      : status.environment_name
+    : ''
   // 头行只有这一个触发钮：受管操作收进右侧抽屉，不再与上游按钮抢一行。
   return (
     <section
       aria-label="受管发布"
       data-aiops-workflow-managed={status.app_id}
-      className="flex items-center"
+      data-aiops-environment={status.environment || ''}
+      className="flex items-center gap-1.5"
     >
+      {status.remote_managed && envBadge && (
+        <span
+          data-aiops-env-badge="true"
+          className="inline-flex items-center rounded-full border border-state-warning-active/40 bg-components-badge-bg-orange-soft px-2 py-0.5 system-xs-medium text-text-warning"
+        >
+          {envBadge}
+        </span>
+      )}
       <Drawer swipeDirection="right">
         <DrawerTrigger
           render={<Button variant="secondary" size="small" className="aiops-glass-pill-btn" />}
@@ -149,7 +163,7 @@ export function WorkflowManagedStrip({
                     <span className="i-ri-rocket-2-line size-4" />
                   </span>
                   <DrawerTitle className="system-lg-semibold text-text-primary">
-                    受管发布
+                    {envBadge ? `受管发布 · ${envBadge}` : '受管发布'}
                   </DrawerTitle>
                 </div>
                 <DrawerCloseButton aria-label="关闭受管发布" />
@@ -182,46 +196,59 @@ export function WorkflowManagedStrip({
                   </div>
                   <div className="aiops-glass-card flex flex-col gap-3 rounded-2xl p-4">
                     <span className="system-sm-semibold text-text-primary">预览客户端客服</span>
-                    <div className="flex flex-col gap-1">
-                      <span className="system-xs-medium text-text-secondary">问题</span>
-                      <Textarea
-                        aria-label="预览问题"
-                        value={question}
-                        onValueChange={setQuestion}
-                        disabled={busy || !!trial}
-                        maxLength={4000}
-                        rows={3}
-                      />
-                    </div>
-                    <div className="flex flex-col gap-1">
-                      <span className="system-xs-medium text-text-secondary">
-                        订单号（查单时填写）
-                      </span>
-                      <Input
-                        aria-label="预览订单号"
-                        value={order}
-                        onValueChange={setOrder}
-                        disabled={busy || !!trial}
-                        maxLength={64}
-                      />
-                    </div>
-                    <Button
-                      variant="primary"
-                      size="small"
-                      className="rounded-full!"
-                      loading={busy}
-                      disabled={disabled || (!trial && (!question.trim() || selectionBlocked))}
-                      onClick={trial ? cancel : start}
-                    >
-                      {trial ? '停止预览' : '开始预览'}
-                    </Button>
-                    <div
-                      role="status"
-                      aria-label="预览结果"
-                      className="max-h-80 overflow-y-auto rounded-xl border border-divider-subtle bg-background-section-burn/55 p-3 system-sm-regular whitespace-pre-wrap text-text-secondary"
-                    >
-                      {message}
-                    </div>
+                    {status.remote_managed ? (
+                      <div
+                        role="status"
+                        aria-label="预览结果"
+                        className="rounded-xl border border-divider-subtle bg-background-section-burn/55 p-3 system-sm-regular text-text-secondary"
+                      >
+                        跨环境编辑模式：支持编辑提示词、知识库授权及发布/回滚至{' '}
+                        {envBadge || status.environment} 生产；带真实业务订单的预览验证请在该业务环境内或「环境与租户 → 验证」中执行。
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex flex-col gap-1">
+                          <span className="system-xs-medium text-text-secondary">问题</span>
+                          <Textarea
+                            aria-label="预览问题"
+                            value={question}
+                            onValueChange={setQuestion}
+                            disabled={busy || !!trial}
+                            maxLength={4000}
+                            rows={3}
+                          />
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          <span className="system-xs-medium text-text-secondary">
+                            订单号（查单时填写）
+                          </span>
+                          <Input
+                            aria-label="预览订单号"
+                            value={order}
+                            onValueChange={setOrder}
+                            disabled={busy || !!trial}
+                            maxLength={64}
+                          />
+                        </div>
+                        <Button
+                          variant="primary"
+                          size="small"
+                          className="rounded-full!"
+                          loading={busy}
+                          disabled={disabled || (!trial && (!question.trim() || selectionBlocked))}
+                          onClick={trial ? cancel : start}
+                        >
+                          {trial ? '停止预览' : '开始预览'}
+                        </Button>
+                        <div
+                          role="status"
+                          aria-label="预览结果"
+                          className="max-h-80 overflow-y-auto rounded-xl border border-divider-subtle bg-background-section-burn/55 p-3 system-sm-regular whitespace-pre-wrap text-text-secondary"
+                        >
+                          {message}
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
               </DrawerContent>
