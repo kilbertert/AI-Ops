@@ -12,7 +12,7 @@ usage() {
 说明:
   - 仅接受不可变 @sha256 镜像摘要（拒绝 :latest/:1.17.1 等可变标签）。
   - 仅更新 .env 中的 DIFY_WEB_IMAGE 并 --force-recreate web，不改动 api/worker/nginx/数据卷。
-  - 若 127.0.0.1:10008/signin 与 /aiops/environments 探活失败，自动回滚至上一版本镜像。
+  - 若 web 重建或探活失败，恢复上一个 DIFY_WEB_IMAGE 设置并尝试重建 web。
 EOF
   exit 2
 }
@@ -160,10 +160,14 @@ bak_env="$DEPLOY_DIR/.env.bak-web-$ts"
 cp -p "$DEPLOY_DIR/.env" "$bak_env"
 
 restore_prev() {
-  echo "!! 探活失败，正在自动恢复上一个 DIFY_WEB_IMAGE" >&2
+  local reason="$1"
+  echo "!! $reason，正在自动恢复上一个 DIFY_WEB_IMAGE" >&2
   cp -p "$bak_env" "$DEPLOY_DIR/.env"
   chmod 600 "$DEPLOY_DIR/.env"
-  docker compose up -d --force-recreate web
+  if ! docker compose up -d --force-recreate web; then
+    echo "AUTO_ROLLBACK_FAILED: 已恢复 .env，但旧版 web 重建失败" >&2
+    exit 1
+  fi
   echo "AUTO_ROLLED_BACK" >&2
   exit 1
 }
@@ -192,7 +196,9 @@ os.replace(tmp, p)
 PY
 
 echo "== 3. 仅重建 web 容器并做本机端点探活"
-docker compose up -d --force-recreate web
+if ! docker compose up -d --force-recreate web; then
+  restore_prev "新版 web 重建失败"
+fi
 
 ok=0
 for _ in $(seq 1 30); do
@@ -206,7 +212,7 @@ for _ in $(seq 1 30); do
 done
 
 if [ "$ok" != "1" ]; then
-  restore_prev
+  restore_prev "探活失败"
 fi
 
 python3 - "$STATE_FILE" "$TARGET_IMAGE" "$cur_image" "$MODE" <<'PY'

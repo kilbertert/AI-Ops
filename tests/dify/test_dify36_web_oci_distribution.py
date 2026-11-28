@@ -7,6 +7,7 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -126,3 +127,70 @@ def test_release_dify_web_workflow_contract_and_docs() -> None:
         txt = doc.read_text(encoding="utf-8")
         assert "publish-web-image.sh" in txt
         assert "deploy-web-image.sh" in txt
+
+
+@pytest.mark.parametrize("restore_status", [0, 1])
+def test_deploy_restores_previous_env_when_compose_recreate_fails(
+    tmp_path: Path, restore_status: int
+) -> None:
+    old_ref = f"registry.example.test/release/web@sha256:{'a' * 64}"
+    new_ref = f"registry.example.test/release/web@sha256:{'b' * 64}"
+    old_env = f"DIFY_WEB_IMAGE={old_ref}\nKEEP_ME=unchanged\n"
+    env_file = tmp_path / ".env"
+    env_file.write_text(old_env, encoding="utf-8")
+    ledger = tmp_path / ".dify-web-release.json"
+    old_ledger = json.dumps({"current_image": old_ref})
+    ledger.write_text(old_ledger, encoding="utf-8")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stubs = {
+        "dev-host": '#!/usr/bin/env bash\nexec bash -c "${@: -1}"\n',
+        "docker": """#!/usr/bin/env bash
+set -eu
+case "$1" in
+  pull|run) exit 0 ;;
+  compose)
+    [ "$*" = "compose up -d --force-recreate web" ] || exit 99
+    if [ ! -f "$COMPOSE_LOG" ]; then
+      grep '^DIFY_WEB_IMAGE=' .env > "$COMPOSE_LOG"
+      exit 1
+    fi
+    grep '^DIFY_WEB_IMAGE=' .env >> "$COMPOSE_LOG"
+    exit "$RESTORE_STATUS"
+    ;;
+  *) exit 99 ;;
+esac
+""",
+        "curl": '#!/usr/bin/env bash\nprintf "unexpected health check\\n" >> "$COMPOSE_LOG"\nexit 99\n',
+    }
+    for name, script in stubs.items():
+        stub = bin_dir / name
+        stub.write_text(script, encoding="utf-8")
+        stub.chmod(0o755)
+
+    compose_log = tmp_path / "compose.log"
+    result = subprocess.run(
+        ["bash", str(DEPLOY_SH), "--image", new_ref, "--deploy-dir", str(tmp_path)],
+        check=False,
+        env={
+            "PATH": f"{bin_dir}:{os.defpath}",
+            "COMPOSE_LOG": str(compose_log),
+            "RESTORE_STATUS": str(restore_status),
+        },
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode != 0
+    assert env_file.read_text(encoding="utf-8") == old_env
+    assert compose_log.read_text(encoding="utf-8").splitlines() == [
+        f"DIFY_WEB_IMAGE={new_ref}",
+        f"DIFY_WEB_IMAGE={old_ref}",
+    ]
+    assert ledger.read_text(encoding="utf-8") == old_ledger
+    if restore_status:
+        assert "AUTO_ROLLBACK_FAILED" in result.stderr
+        assert "AUTO_ROLLED_BACK" not in result.stderr
+    else:
+        assert "AUTO_ROLLED_BACK" in result.stderr

@@ -9,7 +9,7 @@
 - `1.17.1/*.spec.tsx`：基于真实 Chromium（Vitest Browser）的前端组件回归测试。
 - `build-web-image.sh`：核心镜像构建脚本（拉取钉死版本源码 → 校验上游 22 个文件 SHA-256 → 打补丁 → `pnpm build --webpack` 构建独立可运行 OCI 镜像）。
 - `publish-web-image.sh`：CI / 发布标准入口——校验提交归属 `origin/main`、构建、非联网冒烟校验、推送至公司阿里云 ACR（`AIOPS_DIFY_WEB_IMAGE_REPO`）并解析输出不可变 `@sha256` 元数据 `dify-web-image.json`。
-- `deploy-web-image.sh`：36 宿主部署入口——强制校验 `@sha256` 摘要、在 `36` 直接从 ACR `docker pull`、只读冒烟后原子切换 `.env` 的 `DIFY_WEB_IMAGE` 并仅 `--force-recreate web`；探活失败自动回滚，并保留 `--rollback` 一键回退能力。
+- `deploy-web-image.sh`：36 宿主部署入口——强制校验 `@sha256` 摘要、在 `36` 直接从 ACR `docker pull`、只读冒烟后原子切换 `.env` 的 `DIFY_WEB_IMAGE` 并仅 `--force-recreate web`；web 重建或探活失败时恢复旧 `.env` 并尝试重建原 web。若旧 web 也无法重建，脚本会明确报错，不把恢复配置当作恢复服务。仍可使用 `--rollback` 一键回退。
 
 ## 2. 日常发版流程
 
