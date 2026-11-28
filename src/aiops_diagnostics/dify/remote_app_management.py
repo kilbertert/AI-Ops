@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import tempfile
 from pathlib import Path
@@ -251,6 +252,20 @@ def remote_status(service: Any, caller: Any, row: dict[str, Any]) -> dict[str, A
     }
 
 
+def draft_fingerprint(mc: dict[str, Any]) -> str:
+    body = {
+        "pre_prompt": mc.get("pre_prompt"),
+        "tools": [
+            {k: t.get(k) for k in ("provider_id", "provider_type", "tool_name")}
+            | {"enabled": t.get("enabled", True)}
+            for t in mc.get("agent_mode", {}).get("tools", [])
+        ],
+    }
+    return hashlib.sha256(
+        json.dumps(body, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
 def remote_publish(
     service: Any,
     caller: Any,
@@ -258,8 +273,6 @@ def remote_publish(
     revision: int,
     expected_draft: str | None = None,
 ) -> dict[str, Any]:
-    from aiops_diagnostics.dify.self_service import draft_fingerprint
-
     env = str(row["environment"])
     tenant_id = str(row["tenant_id"])
     app_id = str(row["app_id"])

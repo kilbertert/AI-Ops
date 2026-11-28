@@ -11,7 +11,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import threading
 from dataclasses import asdict
@@ -653,15 +652,4 @@ class SelfService:
             }
 
 
-def draft_fingerprint(mc) -> str:
-    body = {
-        "pre_prompt": mc.get("pre_prompt"),
-        "tools": [
-            {k: t.get(k) for k in ("provider_id", "provider_type", "tool_name")}
-            | {"enabled": t.get("enabled", True)}
-            for t in mc.get("agent_mode", {}).get("tools", [])
-        ],
-    }
-    return hashlib.sha256(
-        json.dumps(body, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()
-    ).hexdigest()
+draft_fingerprint = remote_app_management.draft_fingerprint
