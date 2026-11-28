@@ -6,6 +6,7 @@ on:
     types: [closed]
 
 permissions:
+  actions: write # 删除成功后显式触发现有镜像工作流。
   contents: write
   pull-requests: read
 
@@ -67,3 +68,11 @@ jobs:
 
           gh api -X DELETE "repos/${REPO}/git/refs/heads/${encoded_ref}"
           echo "Deleted closed unmerged PR branch: $HEAD_REF"
+
+          # GITHUB_TOKEN 发起的 delete 不会启动另一个工作流。
+          if ! gh api -X POST "repos/${REPO}/actions/workflows/gitlab-mirror.yml/dispatches" \
+            -f "ref=${DEFAULT_BRANCH}" --silent; then
+            echo "GitHub branch deleted, but GitLab mirror dispatch failed. Run the mirror workflow manually." >&2
+            exit 1
+          fi
+          echo "Requested GitLab mirror on $DEFAULT_BRANCH"

@@ -29,7 +29,7 @@ def test_cleanup_workflow_shape_permissions_and_guards() -> None:
     data = _load_yaml(CLEANUP_WORKFLOW)
     on_cfg = data.get("on", data.get(True))
     assert on_cfg == {"pull_request_target": {"types": ["closed"]}}
-    assert data["permissions"] == {"contents": "write", "pull-requests": "read"}
+    assert data["permissions"] == {"actions": "write", "contents": "write", "pull-requests": "read"}
 
     job = data["jobs"]["delete-branch"]
     condition = " ".join(str(job["if"]).split())
@@ -57,6 +57,8 @@ def _run_cleanup(
     open_pulls_json: str = "[]",
     ref_sha: str | None = "abc123",
     default_branch: str = "main",
+    delete_status: int = 0,
+    dispatch_status: int = 0,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
@@ -76,9 +78,10 @@ state = pathlib.Path({str(state_dir)!r})
 args = sys.argv[1:]
 with log.open("a", encoding="utf-8") as fh:
     fh.write(" ".join(args) + "\\n")
-if len(args) >= 2 and args[0] == "api" and args[1] == "-X" and args[2] == "DELETE":
-    print("deleted")
-    sys.exit(0)
+if args[:3] == ["api", "-X", "DELETE"]:
+    sys.exit({delete_status!r})
+if args[:3] == ["api", "-X", "POST"] and args[3].endswith("/gitlab-mirror.yml/dispatches"):
+    sys.exit({dispatch_status!r})
 endpoint = args[1]
 if "/pulls?" in endpoint:
     data = json.loads((state / "open_pulls.json").read_text(encoding="utf-8"))
@@ -126,27 +129,43 @@ def test_refuses_protected_and_empty_branches(tmp_path: Path, protected: str) ->
 def test_skips_when_another_open_pr_uses_branch(tmp_path: Path) -> None:
     proc, calls = _run_cleanup(tmp_path, head_ref="feat/sub-task", open_pulls_json='[{"number": 1808}]')
     assert proc.returncode == 0, proc.stderr
-    assert not any("-X DELETE" in c for c in calls)
+    assert not any(c.startswith(("api -X DELETE", "api -X POST")) for c in calls)
 
 
 def test_exits_cleanly_when_branch_already_absent(tmp_path: Path) -> None:
     proc, calls = _run_cleanup(tmp_path, head_ref="feat/gone", ref_sha=None)
     assert proc.returncode == 0, proc.stderr
-    assert not any("-X DELETE" in c for c in calls)
+    assert not any(c.startswith(("api -X DELETE", "api -X POST")) for c in calls)
 
 
 def test_skips_when_branch_tip_moved_since_close(tmp_path: Path) -> None:
     proc, calls = _run_cleanup(tmp_path, head_ref="feat/reused", head_sha="old111", ref_sha="new222")
     assert proc.returncode == 0, proc.stderr
-    assert not any("-X DELETE" in c for c in calls)
+    assert not any(c.startswith(("api -X DELETE", "api -X POST")) for c in calls)
 
 
-def test_deletes_unmerged_closed_pr_branch_with_slashes(tmp_path: Path) -> None:
-    proc, calls = _run_cleanup(tmp_path, head_ref="feat/sub-task", head_sha="abc123", ref_sha="abc123")
+def test_dispatches_mirror_on_default_branch_after_successful_delete(tmp_path: Path) -> None:
+    proc, calls = _run_cleanup(tmp_path, head_ref="feat/sub-task", default_branch="trunk")
     assert proc.returncode == 0, proc.stderr
-    assert any("api -X DELETE repos/kilbertert/AI-Ops/git/refs/heads/feat/sub-task" in c for c in calls), (
-        calls
-    )
+    assert calls[2:] == [
+        "api -X DELETE repos/kilbertert/AI-Ops/git/refs/heads/feat/sub-task",
+        "api -X POST repos/kilbertert/AI-Ops/actions/workflows/gitlab-mirror.yml/dispatches "
+        "-f ref=trunk --silent",
+    ]
+
+
+def test_does_not_dispatch_when_delete_fails(tmp_path: Path) -> None:
+    proc, calls = _run_cleanup(tmp_path, head_ref="feat/sub-task", delete_status=1)
+    assert proc.returncode != 0
+    assert calls[2:] == ["api -X DELETE repos/kilbertert/AI-Ops/git/refs/heads/feat/sub-task"]
+
+
+def test_fails_visibly_when_mirror_dispatch_fails_after_delete(tmp_path: Path) -> None:
+    proc, calls = _run_cleanup(tmp_path, head_ref="feat/sub-task", dispatch_status=1)
+    assert proc.returncode != 0
+    assert "GitHub branch deleted, but GitLab mirror dispatch failed" in proc.stderr
+    assert len(calls) == 4
+    assert calls[-1].endswith("/gitlab-mirror.yml/dispatches -f ref=main --silent")
 
 
 def test_safe_against_shell_characters_in_branch_name(tmp_path: Path) -> None:
