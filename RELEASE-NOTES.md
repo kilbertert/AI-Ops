@@ -15,6 +15,11 @@
 > 不事后补写（事后凭 commit 标题重构「用户感知」是编造），历史缺口原样保留。
 > 当前缺口：`1.29.0`–`1.40.0`（截至 2026-11-23）。
 
+## [1.43.27] - 2026-11-28
+
+### Fixed
+- 修复 `remote_app_management.run_remote_app_command()` 通过钉扎 SSH 投递 `host_release_agent.py` 时未对 JSON 参数做 `shlex.quote` 导致远端 `sh` 按空格拆参的问题，并补充回归单测。
+
 ## [1.43.26] - 2026-11-28
 
 ### Fixed

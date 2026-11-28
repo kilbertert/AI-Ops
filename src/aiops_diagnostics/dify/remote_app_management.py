@@ -14,6 +14,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import shlex
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -63,9 +64,10 @@ def run_remote_app_command(
         raise auth.SetupRefused("ENVIRONMENT_MANAGEMENT_UNAVAILABLE")
     try:
         conn_info = host_enrollment.load_enrolled_host_connection(reg_path, environment)
+        remote_cmd = f"python3 - {shlex.quote(subcmd)} {shlex.quote(json.dumps(payload, ensure_ascii=False))}"
         proc = host_enrollment.run_pinned_ssh(
             conn_info,
-            ["python3", "-", subcmd, json.dumps(payload, ensure_ascii=False)],
+            [remote_cmd],
             stdin_text=_host_agent_source(),
             timeout=timeout,
         )
