@@ -32,7 +32,7 @@
 | gateway、ops、deploy及agents操作手册 | 保存可复用方法；主机与凭据从受控记录读取，不能照历史命令恢复已退役能力 |
 | validation、开发进度 | 必要验收事件在 `docs/validation/<日期>-<短名>.md` 留一份现役回执；普通进度留原 Issue。依据 [ADR-0345](adr/0345-offload-legacy-receipts-to-archive-repo.md)，旧单体归档（原 `docs/validation.md`、`docs/开发进度.md`）、全部历史 `docs/开发进度/*.md` 及未再引用的旧回执已迁出至独立私有归档仓库 [`kilbertert/AI-Ops-history-archive`](https://github.com/kilbertert/AI-Ops-history-archive) |
 | reviews | 阶段复核与任务处置；PRD和执行依赖仍以GitHub原生issue关系为准 |
-| ADR、GLOSSARY | [现行 ADR 索引](adr-index.md)与术语；新决定由后继 ADR 说明（编号自 `0372` 起顺延，不复用）。依据 [ADR-0370](adr/0370-archive-superseded-and-tactical-adrs.md) 与 [ADR-0371](adr/0371-automated-doc-lifecycle-and-compaction.md)，231 份历史/局部 ADR 已迁入 [`kilbertert/AI-Ops-history-archive`](https://github.com/kilbertert/AI-Ops-history-archive/tree/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr)，后续由 `tools/verification/doc_lifecycle.py` 守卫写入门禁与周期减债体检 |
+| ADR、GLOSSARY | [现行 ADR 索引](adr-index.md)与术语；新决定由后继 ADR 说明（编号自 `0372` 起顺延，不复用）。依据 [ADR-0370](adr/0370-archive-superseded-and-tactical-adrs.md) 与 [ADR-0371](adr/0371-automated-doc-lifecycle-and-compaction.md)，231 份历史/局部 ADR 已迁入 [`kilbertert/AI-Ops-history-archive`](https://github.com/kilbertert/AI-Ops-history-archive/tree/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr)，后续由 `doc_lifecycle.py` / `doc_archive.py` 与 `.github/workflows/doc-lifecycle.yml` 闭环执行写入门禁、每周体检与一键迁冷 |
 | 本机未跟踪素材 | `原型/`、`知识库材料/` 两目录在 `.gitignore` 中，是本机素材不进版本控制——克隆后不存在，别按它们评估仓库规模 |
 | 原始日志、主机快照、会话、工作区清理清单 | 私有归档；仓库只留经过选择和脱敏的结论与方法 |
 

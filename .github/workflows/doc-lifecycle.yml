@@ -1,0 +1,127 @@
+name: Doc Lifecycle
+
+# 文档自动减债闭环（Doc-GC，ADR-0371）：
+# 1) PR 写入控制门禁 + 删文件幽灵引用与 llmdoc 映射提醒；
+# 2) 每周日全仓 Autovacuum 体检，幂等维护唯一滚动台账 Issue（绝不静默删文）。
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  schedule:
+    - cron: "30 3 * * 0"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: doc-lifecycle-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  pr-check:
+    name: PR doc check
+    if: >-
+      github.event_name == 'pull_request' &&
+      (github.event.action == 'ready_for_review' || github.event.pull_request.draft == false)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bd01e18f51369d5a26f1651c3cb451d3417e3bba # v6.3.1
+        with:
+          enable-cache: false
+          python-version: "3.13"
+
+      - name: Run PR doc lifecycle gate and staleness summary
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          out_file="/tmp/doc-lifecycle-pr.md"
+          set +e
+          uv run --no-project --with pyyaml python tools/verification/doc_lifecycle.py \
+            check-pr --base "$PR_BASE" --format markdown --fail-on-error > "$out_file"
+          status=$?
+          set -e
+          cat "$out_file"
+          cat "$out_file" >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+  weekly-autovacuum:
+    name: Weekly doc autovacuum
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bd01e18f51369d5a26f1651c3cb451d3417e3bba # v6.3.1
+        with:
+          enable-cache: false
+          python-version: "3.13"
+
+      - name: Run full-repository doc autovacuum audit
+        run: |
+          set -euo pipefail
+          uv run --no-project --with pyyaml python tools/verification/doc_lifecycle.py \
+            audit --format json > /tmp/doc-audit.json
+          uv run --no-project --with pyyaml python tools/verification/doc_lifecycle.py \
+            audit --format markdown > /tmp/doc-audit.md
+          cat /tmp/doc-audit.md
+          cat /tmp/doc-audit.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Sync rolling maintenance Issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          AUDIT_JSON: /tmp/doc-audit.json
+          AUDIT_MD: /tmp/doc-audit.md
+        run: |
+          set -euo pipefail
+          MARKER="<!-- aiops-doc-lifecycle-ledger -->"
+          LABEL="doc-lifecycle"
+          TITLE="chore(docs): 文档 Autovacuum 周期体检台账（Doc-GC）"
+
+          has_findings=$(python3 -c 'import json, sys; print("true" if json.load(open(sys.argv[1]))["has_actionable_findings"] else "false")' "$AUDIT_JSON")
+
+          existing_num=$(gh api "repos/${REPO}/issues?state=open&labels=${LABEL}&per_page=50" \
+            --jq "[.[] | select((.body // \"\") | contains(\"${MARKER}\"))][0].number // empty")
+
+          if [ "$has_findings" = "true" ]; then
+            gh label create "$LABEL" --color "5319e7" --description "文档自动减债周期体检台账（Doc-GC）" --repo "$REPO" 2>/dev/null || true
+            if [ -n "$existing_num" ]; then
+              gh api -X PATCH "repos/${REPO}/issues/${existing_num}" -F "body=@${AUDIT_MD}" --silent
+              echo "Updated rolling doc-lifecycle ledger issue #${existing_num}"
+            else
+              gh api -X POST "repos/${REPO}/issues" \
+                -f "title=${TITLE}" \
+                -F "body=@${AUDIT_MD}" \
+                -f "labels[]=${LABEL}" --silent
+              echo "Created rolling doc-lifecycle ledger issue"
+            fi
+          else
+            if [ -n "$existing_num" ]; then
+              gh api -X POST "repos/${REPO}/issues/${existing_num}/comments" \
+                -f "body=本轮文档 Autovacuum 体检全部清零，自动关闭此滚动台账。" --silent
+              gh api -X PATCH "repos/${REPO}/issues/${existing_num}" -f "state=closed" --silent
+              echo "Closed clean doc-lifecycle ledger issue #${existing_num}"
+            else
+              echo "Doc autovacuum audit is clean; no rolling issue to update."
+            fi
+          fi
