@@ -33,7 +33,12 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
-from aiops_diagnostics.onboarding import artifact_pool, public_smoke, release_governance
+from aiops_diagnostics.onboarding import (
+    artifact_pool,
+    container_registry,
+    public_smoke,
+    release_governance,
+)
 
 LOCKED_NODE_JAR_ON_41 = "/opt/aiops-node-runtime/aiops-execution-node-bb51c98c.jar"
 HOST_36_ALLOWLIST = "/etc/aiops-dify-api/allowed-sources.conf"
@@ -934,6 +939,308 @@ def _ensure_pool_artifacts(
     }
 
 
+def _decode_output(raw: bytes | str | None) -> str:
+    if isinstance(raw, bytes):
+        return raw.decode("utf-8", errors="replace")
+    return str(raw or "")
+
+
+def _read_registry_config_from_central(root: Path, central_target: str) -> dict[str, Any] | None:
+    """从 41 控制面读取 `registry-config.json`；未配置时返回 None。"""
+    if not central_target:
+        return None
+    remote_path = "/var/lib/aiops-41/onboarding-assets/registry-config.json"
+    try:
+        raw = _dev_host_read(central_target, remote_path, cwd=root)
+    except (WizardWorkerError, subprocess.SubprocessError, OSError, KeyError):
+        return None
+    try:
+        return container_registry.parse_registry_config_bytes(raw)
+    except container_registry.ContainerRegistryRefused as exc:
+        raise WizardWorkerError(str(exc)) from exc
+
+
+def _read_image_catalog_from_central(root: Path, central_target: str) -> dict[str, dict[str, Any]]:
+    """读取可选 41 `image-catalog.json`（手工/私有登记的 `@sha256` 映射表）。"""
+    if not central_target:
+        return {}
+    remote_path = "/var/lib/aiops-41/onboarding-assets/image-catalog.json"
+    try:
+        raw = _dev_host_read(central_target, remote_path, cwd=root)
+    except (WizardWorkerError, subprocess.SubprocessError, OSError, KeyError):
+        return {}
+    try:
+        body = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    entries = body.get("entries") if isinstance(body, dict) else body
+    if not isinstance(entries, list):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for item in entries:
+        clean = container_registry.sanitize_image_descriptor(item)
+        if clean and clean.get("revision"):
+            out[clean["revision"]] = clean
+    return out
+
+
+def _ensure_customer_docker_auth(
+    pinned_host: PinnedCustomerHost,
+    env: str,
+    registry_cfg: dict[str, Any] | None,
+    tmp_dir: Path,
+) -> str:
+    """将拉取凭据隔离写入 `/etc/aiops-access-<env>/docker-config`，绝不碰 `/root/.docker/config.json`。"""
+    cfg_json = container_registry.render_customer_docker_config_json(registry_cfg)
+    if not cfg_json:
+        return ""
+    local_file = tmp_dir / f"docker-config-{env}.json"
+    local_file.write_text(cfg_json, encoding="utf-8")
+    local_file.chmod(0o600)
+    stage_json = f"/tmp/.aiops-dcfg-{env}-{int(time.time())}.json"
+    pinned_host.copy_file(local_file, stage_json)
+    dcfg_dir = f"/etc/aiops-access-{env}/docker-config"
+    setup_cmd = " && ".join(
+        [
+            "set -euo pipefail",
+            f"mkdir -p {shlex.quote(dcfg_dir)}",
+            f"chmod 700 {shlex.quote(dcfg_dir)}",
+            f"mv -f {shlex.quote(stage_json)} {shlex.quote(dcfg_dir)}/config.json",
+            f"chown root:root {shlex.quote(dcfg_dir)} {shlex.quote(dcfg_dir)}/config.json",
+            f"chmod 600 {shlex.quote(dcfg_dir)}/config.json",
+        ]
+    )
+    res = pinned_host.run_cmd(setup_cmd, timeout_sec=30)
+    if res.returncode != 0:
+        raise WizardWorkerError("CUSTOMER_DOCKER_AUTH_WRITE_FAILED")
+    return dcfg_dir
+
+
+def _probe_docker_ready(pinned_host: PinnedCustomerHost) -> bool:
+    """确认客户机已运行可用的 Docker daemon（精准识别哨兵，兼容单测哑 mock）。"""
+    probe_cmd = (
+        "command -v docker >/dev/null 2>&1 "
+        "&& docker info --format '{{.ServerVersion}}' >/dev/null 2>&1 "
+        "&& echo AIOPS_DOCKER_OK"
+    )
+    try:
+        res = pinned_host.run_cmd(probe_cmd, timeout_sec=20)
+    except Exception:
+        return False
+    return res.returncode == 0 and "AIOPS_DOCKER_OK" in _decode_output(res.stdout)
+
+
+def _resolve_oci_image_for_revision(
+    root: Path,
+    central_target: str,
+    *,
+    revision: str,
+) -> dict[str, Any] | None:
+    """为冷装/升级按精确 revision 解析已发布的不可变 `@sha256` OCI 镜像。"""
+    central_imgs = _read_image_catalog_from_central(root, central_target)
+    if revision in central_imgs:
+        return central_imgs[revision]
+    releases = release_governance.collect_git_annotated_releases(root, limit=30)
+    matching = [item for item in releases if item.get("revision") == revision]
+    if not matching:
+        matching = releases[:5]
+    gh_imgs = container_registry.discover_release_images_from_github(root, matching)
+    if revision in gh_imgs:
+        return gh_imgs[revision]
+    return None
+
+
+def _run_oci_cold_install_and_onboard(
+    root: Path,
+    central_target: str,
+    request: Callable[[dict[str, Any]], dict[str, Any]],
+    job_req: dict[str, Any],
+    *,
+    pinned_host: PinnedCustomerHost,
+    image_desc: dict[str, Any],
+) -> dict[str, Any]:
+    """容器原生冷装：国内就近 `docker pull @sha256`，免跨海 24 MiB 传输。"""
+    env = str(job_req["environment"])
+    local_port = int(job_req.get("local_port") or 8788)
+    image_ref = str(image_desc["image_ref"])
+    image_digest = str(image_desc["image_digest"])
+    rev = str(image_desc.get("revision") or "")
+    tag = str(image_desc.get("tag") or "")
+    container_registry.validate_image_ref(image_ref)
+    registry_cfg = _read_registry_config_from_central(root, central_target)
+
+    bundle = request(
+        {
+            "wizard_job": "prepare_bundle",
+            "environment": env,
+            "api_domain": job_req["api_domain"],
+            "tenant_id": job_req.get("tenant_id", ""),
+            "tenant_name": job_req.get("tenant_name", ""),
+            "customer_name": job_req.get("customer_name", env),
+            "local_port": local_port,
+            "actor": job_req.get("actor", "wizard-worker"),
+        }
+    )
+    if not isinstance(bundle, dict) or not bundle.get("ok"):
+        raise WizardWorkerError("CONTROL_PLANE_PREPARE_BUNDLE_FAILED")
+
+    with tempfile.TemporaryDirectory(prefix="aiops-oci-cold-") as tmpdir:
+        tmp = Path(tmpdir)
+        tmp.chmod(0o700)
+        for name, remote_path, expected_sha in (
+            ("template.env", str(bundle["config_path"]), str(bundle.get("config_sha256") or "")),
+            (
+                "runtime-bundle.tar",
+                str(bundle["runtime_bundle_path"]),
+                str(bundle.get("runtime_bundle_sha256") or ""),
+            ),
+            (
+                "nginx-user-ingress-auth.conf",
+                str(bundle["nginx_auth_path"]),
+                str(bundle.get("nginx_auth_sha256") or ""),
+            ),
+        ):
+            out = tmp / name
+            raw_bytes = _dev_host_read(central_target, remote_path, cwd=root)
+            if expected_sha and hashlib.sha256(raw_bytes).hexdigest() != expected_sha:
+                raise WizardWorkerError(f"BUNDLE_FILE_SHA_MISMATCH:{name}")
+            out.write_bytes(raw_bytes)
+            out.chmod(0o600)
+
+        stage_remote = f"/var/backups/aiops-wizard-stage-{env}"
+        q_stage = shlex.quote(stage_remote)
+        pinned_host.run_cmd(f"rm -rf {q_stage} && mkdir -p {q_stage} && chmod 700 {q_stage}")
+        for fname in ("template.env", "runtime-bundle.tar", "nginx-user-ingress-auth.conf"):
+            pinned_host.copy_file(tmp / fname, f"{stage_remote}/{fname}")
+
+        docker_cfg_dir = _ensure_customer_docker_auth(pinned_host, env, registry_cfg, tmp)
+        launcher_file = tmp / "run-container.sh"
+        launcher_file.write_text(container_registry.render_container_launcher_script(), encoding="utf-8")
+        launcher_file.chmod(0o755)
+        unit_file = tmp / f"aiops-access-{env}.service"
+        unit_file.write_text(container_registry.render_container_systemd_unit(env), encoding="utf-8")
+        unit_file.chmod(0o644)
+        pinned_host.copy_file(launcher_file, f"{stage_remote}/run-container.sh")
+        pinned_host.copy_file(unit_file, f"{stage_remote}/aiops-access-{env}.service")
+
+        cfg_root = f"/etc/aiops-access-{env}"
+        var_root = f"/var/lib/aiops-access-{env}"
+        opt_root = f"/opt/aiops-access-{env}"
+        svc_user = f"aiops-access-{env}"
+        dcfg_prefix = f"DOCKER_CONFIG={shlex.quote(docker_cfg_dir)} " if docker_cfg_dir else ""
+        seed_script = "; ".join(
+            [
+                "import json",
+                "from aiops_diagnostics.onboarding.wizard_provision import seed_target_gateway_db",
+                (
+                    f"seed_target_gateway_db('{var_root}/gateway/gateway.db', "
+                    f"json.loads(open('{cfg_root}/runtime/gateway-seed.json').read()))"
+                ),
+            ]
+        )
+        inst_meta_tpl = json.dumps(
+            {
+                "schema": 1,
+                "runtime_mode": "docker",
+                "environment": env,
+                "port": local_port,
+                "user": svc_user,
+                "version": "__VER__",
+                "revision": rev,
+                "tag": tag,
+                "image_ref": image_ref,
+                "image_digest": image_digest,
+            },
+            ensure_ascii=False,
+        )
+        write_inst_py = (
+            "import sys; from pathlib import Path; "
+            f"Path({f'{opt_root}/installed.json'!r}).write_text("
+            f"{inst_meta_tpl!r}.replace('__VER__', sys.argv[1]) + '\\n', encoding='utf-8')"
+        )
+        pull_verify_cmd = "\n".join(
+            [
+                "set -euo pipefail",
+                f"if ! id -u {shlex.quote(svc_user)} >/dev/null 2>&1; then",
+                f"  useradd --system --no-create-home --shell /usr/sbin/nologin {shlex.quote(svc_user)}",
+                "fi",
+                f"uid=$(id -u {shlex.quote(svc_user)})",
+                f"gid=$(id -g {shlex.quote(svc_user)})",
+                f"{dcfg_prefix}docker pull {shlex.quote(image_ref)}",
+                f"ver=$({dcfg_prefix}docker run --rm --network none --read-only "
+                '--tmpfs /tmp:rw,noexec,nosuid,size=32m --user "$uid:$gid" '
+                "--security-opt no-new-privileges:true --cap-drop ALL "
+                f"--entrypoint /opt/aiops/venv/bin/python {shlex.quote(image_ref)} "
+                "-c 'import aiops_diagnostics; print(aiops_diagnostics.__version__)')",
+                f"mkdir -p {cfg_root}/runtime {cfg_root}/registry "
+                f"{var_root}/keys {var_root}/gateway {opt_root}",
+                f"chmod 755 {cfg_root} {opt_root}",
+                f"tar -xf {stage_remote}/runtime-bundle.tar -C {cfg_root}",
+                f"mv -f {cfg_root}/dify-keys/* {var_root}/keys/ 2>/dev/null || true",
+                f"rmdir {cfg_root}/dify-keys 2>/dev/null || true",
+                f"cp -f {stage_remote}/nginx-user-ingress-auth.conf {cfg_root}/nginx-user-ingress-auth.conf",
+                f"cp -f {stage_remote}/template.env {cfg_root}/production.env",
+                f"chmod 700 {cfg_root}/runtime {cfg_root}/registry "
+                f"{var_root} {var_root}/keys {var_root}/gateway",
+                f"chmod 600 {cfg_root}/production.env {cfg_root}/runtime/* {cfg_root}/registry/* "
+                f"{var_root}/keys/* {cfg_root}/nginx-user-ingress-auth.conf",
+                f"chown {svc_user}:{svc_user} {cfg_root}/production.env",
+                f"chown -R {svc_user}:{svc_user} {cfg_root}/runtime {cfg_root}/registry "
+                f"{var_root}/keys {var_root}/gateway",
+                f"chmod a+rX {cfg_root} {cfg_root}/runtime && chmod a+r {cfg_root}/runtime/gateway-seed.json",
+                f"{dcfg_prefix}docker run --rm --network none --read-only "
+                '--tmpfs /tmp:rw,noexec,nosuid,size=32m --user "$uid:$gid" '
+                "--security-opt no-new-privileges:true --cap-drop ALL "
+                f"-v {cfg_root}/runtime:{cfg_root}/runtime:ro "
+                f"-v {var_root}:{var_root}:rw "
+                f"--entrypoint /opt/aiops/venv/bin/python {shlex.quote(image_ref)} "
+                f"-c {shlex.quote(seed_script)}",
+                f"chmod 700 {cfg_root}/runtime && chmod 600 {cfg_root}/runtime/*",
+                f"chown -R {svc_user}:{svc_user} {var_root}/gateway",
+                f"cat > {opt_root}/container.env <<EOF",
+                f"ENV_NAME={env}",
+                f"IMAGE_REF={image_ref}",
+                f"LOCAL_PORT={local_port}",
+                "RUN_UID=${uid}",
+                "RUN_GID=${gid}",
+                "EOF",
+                f"chmod 644 {opt_root}/container.env",
+                f"install -m 755 {stage_remote}/run-container.sh {opt_root}/run-container.sh",
+                (
+                    f"install -m 644 {stage_remote}/aiops-access-{env}.service "
+                    f"/etc/systemd/system/aiops-access-{env}.service"
+                ),
+                f'python3 -c {shlex.quote(write_inst_py)} "$ver"',
+                f"chmod 600 {opt_root}/installed.json",
+                "systemctl daemon-reload",
+                f"systemctl enable aiops-access-{env}.service >/dev/null 2>&1 || true",
+                f"systemctl restart aiops-access-{env}.service",
+                (
+                    f"for _i in $(seq 1 25); do curl -fsS http://127.0.0.1:{local_port}/health "
+                    "&& break; sleep 1; done"
+                ),
+                f"curl -fsS http://127.0.0.1:{local_port}/health",
+                f"rm -rf {q_stage}",
+            ]
+        )
+        res = pinned_host.run_cmd(pull_verify_cmd, timeout_sec=300)
+        if res.returncode != 0:
+            raise WizardWorkerError("CUSTOMER_OCI_COLD_INSTALL_FAILED")
+
+    return {
+        "ok": True,
+        "runtime_mode": "docker",
+        "image_digest": image_digest,
+        "consumer_kb_id": str(bundle.get("consumer_kb_id") or ""),
+        "operator_kb_id": str(bundle.get("operator_kb_id") or ""),
+        "workspace_id": str(bundle.get("workspace_id") or ""),
+        "consumer_app_id": str(bundle.get("consumer_app_id") or ""),
+        "operator_app_id": str(bundle.get("operator_app_id") or ""),
+        "tenant_id": str(bundle.get("tenant_id") or ""),
+        "tenant_name": str(bundle.get("tenant_name") or ""),
+    }
+
+
 def _step_cold_install_and_onboard(
     root: Path,
     central_target: str,
@@ -942,13 +1249,25 @@ def _step_cold_install_and_onboard(
     *,
     pinned_host: PinnedCustomerHost,
 ) -> dict[str, Any]:
-    """解析/构建制品 + 调用 41 prepare_bundle + 钉扎 SSH 客户机冷装与运行态注入。"""
+    """解析/构建制品 + 调用 41 prepare_bundle + 钉扎 SSH 客户机冷装与运行态注入（优先容器原生）。"""
     env = str(job_req["environment"])
     python_minor = str(job_req.get("python_minor") or "3.12")
     if python_minor not in artifact_pool.SUPPORTED_PYTHON_MINORS:
         python_minor = "3.12"
     local_port = int(job_req.get("local_port") or 8788)
     revision = subprocess.check_output(["git", "rev-parse", "origin/main"], cwd=str(root), text=True).strip()
+
+    if _probe_docker_ready(pinned_host):
+        image_desc = _resolve_oci_image_for_revision(root, central_target, revision=revision)
+        if image_desc:
+            return _run_oci_cold_install_and_onboard(
+                root,
+                central_target,
+                request,
+                job_req,
+                pinned_host=pinned_host,
+                image_desc=image_desc,
+            )
 
     pool_info = _ensure_pool_artifacts(root, central_target, revision=revision, python_minor=python_minor)
     bundle = request(
@@ -1585,7 +1904,7 @@ def sync_release_catalog_to_central(
     request: Callable[[dict[str, Any]], dict[str, Any]],
     fetch_tags: bool = True,
 ) -> list[dict[str, Any]]:
-    """从受保护 origin/main 收集正式注释 SemVer 标签并同步至 41 控制面目录。"""
+    """从受保护 origin/main 收集正式注释 SemVer 标签（含 OCI 不可变镜像摘要）并同步至 41 控制面目录。"""
     global _LAST_RELEASE_CATALOG_DIGEST
     if fetch_tags:
         with suppress(subprocess.SubprocessError, OSError):
@@ -1596,7 +1915,14 @@ def sync_release_catalog_to_central(
                 timeout=30,
             )
     pool_entries = _read_pool_entries_from_central(root, central_target) if central_target else []
-    entries = release_governance.collect_git_annotated_releases(root, pool_entries=pool_entries)
+    base_releases = release_governance.collect_git_annotated_releases(root, pool_entries=pool_entries)
+    image_entries = container_registry.discover_release_images_from_github(root, base_releases)
+    if central_target:
+        central_imgs = _read_image_catalog_from_central(root, central_target)
+        image_entries.update(central_imgs)
+    entries = release_governance.collect_git_annotated_releases(
+        root, pool_entries=pool_entries, image_entries=image_entries
+    )
     digest = hashlib.sha256(json.dumps(entries, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     if entries and digest != _LAST_RELEASE_CATALOG_DIGEST:
         request({"wizard_job": "save_release_catalog", "entries": entries})
@@ -1667,7 +1993,7 @@ def _probe_customer_release_state(
 ) -> dict[str, Any]:
     probe_py = "\n".join(
         [
-            "import json, os, subprocess, urllib.request",
+            "import json, os, shutil, subprocess, urllib.request",
             "from pathlib import Path",
             f"env = {env!r}",
             f"api_domain = {api_domain!r}",
@@ -1675,13 +2001,26 @@ def _probe_customer_release_state(
             "inst_f = root / 'installed.json'",
             "inst = json.loads(inst_f.read_text(encoding='utf-8')) if inst_f.is_file() else {}",
             "port = int(inst.get('port') or 8788)",
+            "ctr_env_p = root / 'container.env'",
+            "ctr_image_ref = str(inst.get('image_ref') or '')",
+            "if ctr_env_p.is_file():",
+            "    for ln in ctr_env_p.read_text(encoding='utf-8').splitlines():",
+            "        if ln.startswith('IMAGE_REF='):",
+            "            ctr_image_ref = ln.split('=', 1)[1].strip()",
+            "runtime_mode = 'docker' if (",
+            "    inst.get('runtime_mode') == 'docker' or ctr_env_p.is_file()",
+            ") else 'venv'",
+            "docker_bin = shutil.which('docker')",
+            "docker_available = bool(docker_bin) and subprocess.run(",
+            "    [docker_bin, 'info', '--format', '{{.ServerVersion}}'], capture_output=True",
+            ").returncode == 0",
             "cur = root / 'current'",
             "cur_real = os.path.realpath(cur) if cur.exists() else ''",
             "cur_is_link = cur.is_symlink()",
             "py_bin = root / 'current/venv/bin/python'",
-            "py_minor = ''",
+            "py_minor = str(inst.get('python') or '')",
             "pkg_ver = ''",
-            "if py_bin.is_file():",
+            "if runtime_mode != 'docker' and py_bin.is_file():",
             "    code = 'import json,sys,aiops_diagnostics; '",
             '    code += \'print(json.dumps({"m": f"{sys.version_info.major}.{sys.version_info.minor}", \'',
             "    code += '\"v\": aiops_diagnostics.__version__}))'",
@@ -1689,6 +2028,8 @@ def _probe_customer_release_state(
             "    info = json.loads(out)",
             "    py_minor = info.get('m', '')",
             "    pkg_ver = info.get('v', '')",
+            "if not py_minor:",
+            "    py_minor = '3.12'",
             "health = {}",
             "try:",
             "    with urllib.request.urlopen(f'http://127.0.0.1:{port}/health', timeout=5) as r:",
@@ -1702,27 +2043,44 @@ def _probe_customer_release_state(
             "pinc_txt = pinc_p.read_text(encoding='utf-8') if pinc_p.is_file() else ''",
             "prev = inst.get('previous_release')",
             "prev = prev if isinstance(prev, dict) else None",
+            "prev_mode = str((prev or {}).get('runtime_mode') or 'venv')",
             "prev_dir = str((prev or {}).get('release_dir') or '')",
-            "prev_dir_ok = bool(prev and prev_dir and Path(prev_dir).is_dir())",
+            "prev_img = str((prev or {}).get('image_ref') or '')",
+            "prev_ok = bool(",
+            "    prev and ((prev_mode == 'docker' and prev_img) or (prev_dir and Path(prev_dir).is_dir()))",
+            ")",
+            "cur_digest = str(",
+            "    inst.get('image_digest')",
+            "    or (ctr_image_ref.split('@', 1)[1] if '@' in ctr_image_ref else '')",
+            ")",
+            "rel_name = (",
+            "    cur_digest[:19]",
+            "    if runtime_mode == 'docker' and cur_digest",
+            "    else (Path(cur_real).name if cur_real else '')",
+            ")",
             "print(json.dumps({",
             "  'port': port,",
+            "  'runtime_mode': runtime_mode,",
+            "  'docker_available': docker_available,",
+            "  'current_image_ref': ctr_image_ref,",
+            "  'current_image_digest': cur_digest,",
             "  'current_is_symlink': cur_is_link,",
             "  'current_release_dir': cur_real,",
-            "  'current_release_name': Path(cur_real).name if cur_real else '',",
+            "  'current_release_name': rel_name,",
             "  'installed_version': str(inst.get('version') or pkg_ver),",
             "  'installed_revision': str(inst.get('revision') or ''),",
             "  'python_minor': py_minor,",
             "  'health': health,",
             "  'user_conf': uconf_txt,",
             "  'proxy_inc': pinc_txt,",
-            "  'previous_release': prev if prev_dir_ok else None,",
+            "  'previous_release': prev if prev_ok else None,",
             "}))",
         ]
     )
     res = pinned_host.run_cmd(f"python3 -c {shlex.quote(probe_py)}", timeout_sec=30)
     if res.returncode != 0 or not res.stdout.strip():
         raise WizardWorkerError("TARGET_RELEASE_PROBE_FAILED")
-    raw = json.loads(res.stdout.strip().splitlines()[-1])
+    raw = json.loads(_decode_output(res.stdout).strip().splitlines()[-1])
     port = int(raw.get("port") or 8788)
     uconf = str(raw.get("user_conf") or "")
     pinc = str(raw.get("proxy_inc") or "")
@@ -1757,16 +2115,30 @@ def _probe_customer_release_state(
     prev = raw.get("previous_release")
     rollback_target = None
     if isinstance(prev, dict) and prev.get("version"):
+        prev_mode = str(prev.get("runtime_mode") or "venv")
+        prev_digest = str(prev.get("image_digest") or "")
+        rel_name = (
+            prev_digest[:19]
+            if prev_mode == "docker" and prev_digest
+            else Path(str(prev.get("release_dir") or "")).name
+        )
         rollback_target = {
             "version": str(prev.get("version") or ""),
             "revision": str(prev.get("revision") or ""),
-            "release_name": Path(str(prev.get("release_dir") or "")).name,
+            "release_name": rel_name,
+            "runtime_mode": prev_mode,
+            "image_digest": prev_digest,
             "recorded_at": prev.get("recorded_at"),
             "has_nginx_backup": bool(prev.get("nginx_backup_dir")),
         }
 
+    runtime_mode = str(raw.get("runtime_mode") or "venv")
     return {
         "port": port,
+        "runtime_mode": runtime_mode,
+        "docker_available": bool(raw.get("docker_available")),
+        "current_image_ref": str(raw.get("current_image_ref") or ""),
+        "current_image_digest": str(raw.get("current_image_digest") or ""),
         "current_is_symlink": bool(raw.get("current_is_symlink")),
         "current_release_name": str(raw.get("current_release_name") or ""),
         "current_version": cur_ver,
@@ -1793,6 +2165,10 @@ def _persist_release_state(
                 "current_version": probe_data["current_version"],
                 "current_revision": probe_data["current_revision"],
                 "python_minor": probe_data["python_minor"],
+                "runtime_mode": probe_data.get("runtime_mode", "venv"),
+                "current_image_digest": probe_data.get("current_image_digest", ""),
+                "current_image_ref": probe_data.get("current_image_ref", ""),
+                "docker_available": bool(probe_data.get("docker_available")),
                 "health_ok": probe_data["health_ok"],
                 "business_mutations": probe_data["business_mutations"],
                 "current_ingress_sha256": probe_data["current_ingress_sha256"],
@@ -1862,6 +2238,9 @@ def execute_release_probe_job(
                 "current_version": probe_data["current_version"],
                 "current_revision": probe_data["current_revision"],
                 "python_minor": probe_data["python_minor"],
+                "runtime_mode": probe_data.get("runtime_mode", "venv"),
+                "current_image_digest": probe_data.get("current_image_digest", ""),
+                "docker_available": bool(probe_data.get("docker_available")),
                 "health_ok": probe_data["health_ok"],
                 "business_mutations": probe_data["business_mutations"],
             },
@@ -1878,13 +2257,15 @@ def execute_environment_upgrade_job(
     pinned_factory: Callable[..., PinnedCustomerHost] | None = None,
     public_smoke_fn: Callable[[str, str], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """执行已上线客户环境无损原地滚动升级（含隔离 venv、Nginx 同步、零触碰核验与失败自回滚）。"""
+    """执行已上线客户环境无损原地滚动升级（优先 OCI 容器镜像秒拉切换，历史无镜像回退隔离 venv）。"""
     job_id = str(job["job_id"])
     req = dict(job.get("request") or {})
     env = str(job["environment"])
     target_tag = str(req.get("target_tag") or "").strip()
     target_rev = str(req.get("target_revision") or "").strip()
     target_full_version = str(req.get("target_full_version") or "").strip()
+    target_image_ref = str(req.get("target_image_ref") or "").strip()
+    target_image_digest = str(req.get("target_image_digest") or "").strip()
     gateway_url = str(req.get("gateway_url") or "").strip()
     api_domain = str(req.get("api_domain") or "").strip()
     tenant_id = str(req.get("tenant_id") or "").strip()
@@ -1930,8 +2311,11 @@ def execute_environment_upgrade_job(
     def _err(exc: Exception, default: str) -> str:
         return (str(exc).strip()[:120] or default) if isinstance(exc, WizardWorkerError) else default
 
-    # Step 0: 校验不可变注释标签 + 探测目标机 + 匹配/构建离线包与 Nginx 模板
+    # Step 0: 校验不可变注释标签 + 探测目标机 + 匹配 OCI 镜像摘要（或回退离线包）与 Nginx 模板
     _update(0, "running")
+    use_oci = False
+    registry_cfg: dict[str, Any] | None = None
+    pool_info: dict[str, Any] = {}
     try:
         if not release_governance.is_valid_release_tag(target_tag):
             raise WizardWorkerError("ENVIRONMENT_RELEASE_TAG_INVALID")
@@ -1961,18 +2345,32 @@ def execute_environment_upgrade_job(
             raise WizardWorkerError("ENVIRONMENT_RELEASE_NOT_ON_MAIN")
 
         catalog = sync_release_catalog_to_central(root, central_target, request=request, fetch_tags=False)
+        if not target_image_ref:
+            matched_cat = next((e for e in catalog if str(e.get("revision") or "") == target_rev), None)
+            if isinstance(matched_cat, dict):
+                target_image_ref = str(matched_cat.get("image_ref") or "").strip()
+                target_image_digest = str(matched_cat.get("image_digest") or "").strip()
+
         pinned_host = (pinned_factory or PinnedCustomerHost.from_central)(central_target, env, cwd=root)
         before_probe = _probe_customer_release_state(pinned_host, env, api_domain, catalog)
-        if not before_probe["current_is_symlink"]:
+        if before_probe["runtime_mode"] != "docker" and not before_probe["current_is_symlink"]:
             raise WizardWorkerError("TARGET_CURRENT_NOT_SYMLINK")
         local_port = int(before_probe["port"])
         python_minor = str(before_probe["python_minor"] or "3.12")
-        if python_minor not in artifact_pool.SUPPORTED_PYTHON_MINORS:
-            raise WizardWorkerError("ENVIRONMENT_ARTIFACT_PYTHON_UNSUPPORTED")
 
-        pool_info = _ensure_pool_artifacts(
-            root, central_target, revision=target_rev, python_minor=python_minor
+        use_oci = container_registry.is_valid_image_ref(target_image_ref) and bool(
+            before_probe.get("docker_available")
         )
+        if use_oci:
+            _, _, validated_digest = container_registry.validate_image_ref(target_image_ref)
+            target_image_digest = validated_digest
+            registry_cfg = _read_registry_config_from_central(root, central_target)
+        else:
+            if python_minor not in artifact_pool.SUPPORTED_PYTHON_MINORS:
+                raise WizardWorkerError("ENVIRONMENT_ARTIFACT_PYTHON_UNSUPPORTED")
+            pool_info = _ensure_pool_artifacts(
+                root, central_target, revision=target_rev, python_minor=python_minor
+            )
         nginx_bundle = _render_revision_user_ingress(root, target_rev, env, local_port)
     except Exception as exc:
         return _fail(0, _err(exc, "RELEASE_RESOLVE_ARTIFACT_FAILED"))
@@ -1987,8 +2385,12 @@ def execute_environment_upgrade_job(
         f"/etc/aiops-access-{env}/nginx-user-ingress-auth.conf",
     ]
     pre_hashes: dict[str, str] = {}
+    old_release_dir = ""
+    old_image_ref = ""
+    run_uid = 0
+    run_gid = 0
 
-    # Step 1: 传输离线包并在隔离 releases/<rev>-<id>/venv 安装及预检版本（不切流量）
+    # Step 1: 国内 OCI 镜像秒级拉取+容器预检（或历史离线包隔离安装）
     _update(1, "running")
     try:
         q_stage = shlex.quote(stage_remote)
@@ -1999,24 +2401,35 @@ def execute_environment_upgrade_job(
         with tempfile.TemporaryDirectory(prefix="aiops-up-scp-") as tmpdir:
             tmp = Path(tmpdir)
             tmp.chmod(0o700)
-            app_tar = tmp / "application.tar.gz"
-            cached = Path(pool_info.get("app_local") or "")
-            if (
-                pool_info.get("app_local")
-                and cached.is_file()
-                and hashlib.sha256(cached.read_bytes()).hexdigest() == pool_info["app_sha256"]
-            ):
-                shutil.copyfile(cached, app_tar)
-                app_tar.chmod(0o600)
+            if not use_oci:
+                app_tar = tmp / "application.tar.gz"
+                cached = Path(pool_info.get("app_local") or "")
+                if (
+                    pool_info.get("app_local")
+                    and cached.is_file()
+                    and hashlib.sha256(cached.read_bytes()).hexdigest() == pool_info["app_sha256"]
+                ):
+                    shutil.copyfile(cached, app_tar)
+                    app_tar.chmod(0o600)
+                else:
+                    _dev_host_download_file(
+                        central_target,
+                        pool_info["app_remote"],
+                        app_tar,
+                        expected_sha256=pool_info["app_sha256"],
+                        cwd=root,
+                    )
+                pinned_host.copy_file(app_tar, f"{stage_remote}/application.tar.gz")
             else:
-                _dev_host_download_file(
-                    central_target,
-                    pool_info["app_remote"],
-                    app_tar,
-                    expected_sha256=pool_info["app_sha256"],
-                    cwd=root,
-                )
-            pinned_host.copy_file(app_tar, f"{stage_remote}/application.tar.gz")
+                docker_cfg_dir = _ensure_customer_docker_auth(pinned_host, env, registry_cfg, tmp)
+                launcher_f = tmp / "run-container.sh"
+                launcher_f.write_text(container_registry.render_container_launcher_script(), encoding="utf-8")
+                launcher_f.chmod(0o755)
+                pinned_host.copy_file(launcher_f, f"{stage_remote}/run-container.sh")
+                unit_f = tmp / f"aiops-access-{env}.service"
+                unit_f.write_text(container_registry.render_container_systemd_unit(env), encoding="utf-8")
+                unit_f.chmod(0o644)
+                pinned_host.copy_file(unit_f, f"{stage_remote}/aiops-access-{env}.service")
 
             for fname, txt in (
                 ("aiops-user-ingress.conf", nginx_bundle["user_conf"]),
@@ -2027,88 +2440,146 @@ def execute_environment_upgrade_job(
                 nf.chmod(0o644)
                 pinned_host.copy_file(nf, f"{stage_remote}/{fname}")
 
-        install_py = "\n".join(
-            [
-                "import hashlib, json, os, shutil, subprocess, tarfile",
-                "from pathlib import Path",
-                "os.umask(0o022)",
-                f"env = {env!r}",
-                f"app_tar = Path({stage_remote!r}) / 'application.tar.gz'",
-                f"app_sha = {pool_info['app_sha256']!r}",
-                f"target_ver = {target_full_version!r}",
-                f"py_minor = {python_minor!r}",
-                f"new_dir = Path({new_release_dir!r})",
-                f"protected = {protected_paths!r}",
-                "pre_hashes = {",
-                "    p: hashlib.sha256(Path(p).read_bytes()).hexdigest()",
-                "    for p in protected if Path(p).is_file()",
-                "}",
-                "actual_sha = hashlib.sha256(app_tar.read_bytes()).hexdigest()",
-                "assert actual_sha == app_sha, 'ARCHIVE_SHA_MISMATCH'",
-                f"up = Path({stage_remote!r}) / 'unpacked'",
-                "up.mkdir(parents=True, exist_ok=True)",
-                "tarfile.open(app_tar, 'r:gz').extractall(up)",
-                "meta = json.loads((up / 'manifest.json').read_text(encoding='utf-8'))",
-                "assert meta['version'] == target_ver, f'VERSION_MISMATCH:{meta[\"version\"]}'",
-                "whl = str(next((up / 'wheelhouse').glob('aiops_diagnostics-*.whl')))",
-                f"cur_real = Path(os.path.realpath('/opt/aiops-access-{env}/current'))",
-                "cur_py = cur_real / 'venv/bin/python'",
-                "base_py = ''",
-                "cands = [",
-                "    f'/usr/local/bin/python{py_minor}',",
-                "    f'/usr/bin/python{py_minor}',",
-                "    str(Path(os.path.realpath(str(cur_py))) if cur_py.exists() else ''),",
-                "]",
-                "v_cmd = 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")'",
-                "for cand in cands:",
-                "    if not cand or not Path(cand).is_file():",
-                "        continue",
-                "    try:",
-                "        vm = subprocess.check_output([cand, '-c', v_cmd], text=True).strip()",
-                "        if vm == py_minor:",
-                "            base_py = cand",
-                "            break",
-                "    except Exception:",
-                "        pass",
-                "assert base_py, f'BASE_PYTHON_NOT_FOUND:{py_minor}'",
-                "if new_dir.exists():",
-                "    shutil.rmtree(new_dir)",
-                "new_dir.mkdir(parents=True, mode=0o755)",
-                "for item in cur_real.iterdir():",
-                "    if item.name in {'venv', '__pycache__'}:",
-                "        continue",
-                "    dst = new_dir / item.name",
-                "    if item.is_dir():",
-                "        shutil.copytree(item, dst, symlinks=True)",
-                "    elif item.is_file():",
-                "        shutil.copy2(item, dst)",
-                "subprocess.run([base_py, '-m', 'venv', str(new_dir / 'venv')], check=True)",
-                "pip_bin = str(new_dir / 'venv/bin/pip')",
-                "pip_env = {'PATH': '/usr/bin:/bin', 'PIP_CONFIG_FILE': '/dev/null'}",
-                "subprocess.run([",
-                "    pip_bin, 'install', '--no-index', '--find-links',",
-                "    str(up / 'wheelhouse'), '--upgrade', '--upgrade-strategy',",
-                "    'only-if-needed', whl,",
-                "], env=pip_env, check=True)",
-                "subprocess.run([",
-                "    pip_bin, 'install', '--no-index', '--no-deps', '--force-reinstall', whl,",
-                "], env=pip_env, check=True)",
-                "ver_cmd = 'import aiops_diagnostics; print(aiops_diagnostics.__version__)'",
-                "inst_ver = subprocess.check_output([",
-                "    str(new_dir / 'venv/bin/python'), '-c', ver_cmd,",
-                "], text=True).strip()",
-                "assert inst_ver == target_ver, f'INSTALLED_VER_MISMATCH:{inst_ver}'",
-                "print(json.dumps({'pre_hashes': pre_hashes, 'old_release_dir': str(cur_real)}))",
-            ]
-        )
-        res = pinned_host.run_cmd(f"python3 -c {shlex.quote(install_py)}", timeout_sec=240)
-        if res.returncode != 0 or not res.stdout.strip():
-            raise WizardWorkerError("TARGET_ISOLATED_INSTALL_FAILED")
-        install_info = json.loads(res.stdout.strip().splitlines()[-1])
-        pre_hashes = dict(install_info.get("pre_hashes") or {})
-        old_release_dir = str(install_info.get("old_release_dir") or "")
+        if use_oci:
+            oci_pull_py = "\n".join(
+                [
+                    "import hashlib, json, os, pwd, subprocess",
+                    "from pathlib import Path",
+                    f"env = {env!r}",
+                    f"image_ref = {target_image_ref!r}",
+                    f"target_ver = {target_full_version!r}",
+                    f"docker_cfg = {docker_cfg_dir!r}",
+                    f"protected = {protected_paths!r}",
+                    "pre_hashes = {",
+                    "    p: hashlib.sha256(Path(p).read_bytes()).hexdigest()",
+                    "    for p in protected if Path(p).is_file()",
+                    "}",
+                    "pw = pwd.getpwnam(f'aiops-access-{env}')",
+                    "uid, gid = pw.pw_uid, pw.pw_gid",
+                    "d_env = dict(os.environ)",
+                    "if docker_cfg:",
+                    "    d_env['DOCKER_CONFIG'] = docker_cfg",
+                    "subprocess.run(['docker', 'pull', image_ref], env=d_env, check=True)",
+                    "smoke_ver = subprocess.check_output([",
+                    "    'docker', 'run', '--rm', '--network', 'none', '--read-only',",
+                    "    '--tmpfs', '/tmp:rw,noexec,nosuid,size=32m', '--user', f'{uid}:{gid}',",
+                    "    '--security-opt', 'no-new-privileges:true', '--cap-drop', 'ALL',",
+                    "    '--entrypoint', '/opt/aiops/venv/bin/python', image_ref,",
+                    "    '-c', 'import aiops_diagnostics; print(aiops_diagnostics.__version__)',",
+                    "], env=d_env, text=True).strip()",
+                    "assert smoke_ver == target_ver, f'IMAGE_VERSION_MISMATCH:{smoke_ver}'",
+                    "root = Path(f'/opt/aiops-access-{env}')",
+                    "cur = root / 'current'",
+                    "cur_real = os.path.realpath(cur) if cur.exists() else ''",
+                    "ctr_env_p = root / 'container.env'",
+                    "old_img = ''",
+                    "if ctr_env_p.is_file():",
+                    "    for ln in ctr_env_p.read_text(encoding='utf-8').splitlines():",
+                    "        if ln.startswith('IMAGE_REF='):",
+                    "            old_img = ln.split('=', 1)[1].strip()",
+                    "print(json.dumps({",
+                    "    'pre_hashes': pre_hashes,",
+                    "    'old_release_dir': cur_real,",
+                    "    'old_image_ref': old_img,",
+                    "    'run_uid': uid,",
+                    "    'run_gid': gid,",
+                    "}))",
+                ]
+            )
+            res = pinned_host.run_cmd(f"python3 -c {shlex.quote(oci_pull_py)}", timeout_sec=240)
+            if res.returncode != 0 or not _decode_output(res.stdout).strip():
+                raise WizardWorkerError("TARGET_OCI_PULL_VERIFY_FAILED")
+            install_info = json.loads(_decode_output(res.stdout).strip().splitlines()[-1])
+            pre_hashes = dict(install_info.get("pre_hashes") or {})
+            old_release_dir = str(install_info.get("old_release_dir") or "")
+            old_image_ref = str(install_info.get("old_image_ref") or "")
+            run_uid = int(install_info.get("run_uid") or 0)
+            run_gid = int(install_info.get("run_gid") or 0)
+        else:
+            install_py = "\n".join(
+                [
+                    "import hashlib, json, os, shutil, subprocess, tarfile",
+                    "from pathlib import Path",
+                    "os.umask(0o022)",
+                    f"env = {env!r}",
+                    f"app_tar = Path({stage_remote!r}) / 'application.tar.gz'",
+                    f"app_sha = {pool_info['app_sha256']!r}",
+                    f"target_ver = {target_full_version!r}",
+                    f"py_minor = {python_minor!r}",
+                    f"new_dir = Path({new_release_dir!r})",
+                    f"protected = {protected_paths!r}",
+                    "pre_hashes = {",
+                    "    p: hashlib.sha256(Path(p).read_bytes()).hexdigest()",
+                    "    for p in protected if Path(p).is_file()",
+                    "}",
+                    "actual_sha = hashlib.sha256(app_tar.read_bytes()).hexdigest()",
+                    "assert actual_sha == app_sha, 'ARCHIVE_SHA_MISMATCH'",
+                    f"up = Path({stage_remote!r}) / 'unpacked'",
+                    "up.mkdir(parents=True, exist_ok=True)",
+                    "tarfile.open(app_tar, 'r:gz').extractall(up)",
+                    "meta = json.loads((up / 'manifest.json').read_text(encoding='utf-8'))",
+                    "assert meta['version'] == target_ver, f'VERSION_MISMATCH:{meta[\"version\"]}'",
+                    "whl = str(next((up / 'wheelhouse').glob('aiops_diagnostics-*.whl')))",
+                    f"cur_real = Path(os.path.realpath('/opt/aiops-access-{env}/current'))",
+                    "cur_py = cur_real / 'venv/bin/python'",
+                    "base_py = ''",
+                    "cands = [",
+                    "    f'/usr/local/bin/python{py_minor}',",
+                    "    f'/usr/bin/python{py_minor}',",
+                    "    str(Path(os.path.realpath(str(cur_py))) if cur_py.exists() else ''),",
+                    "]",
+                    "v_cmd = 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")'",
+                    "for cand in cands:",
+                    "    if not cand or not Path(cand).is_file():",
+                    "        continue",
+                    "    try:",
+                    "        vm = subprocess.check_output([cand, '-c', v_cmd], text=True).strip()",
+                    "        if vm == py_minor:",
+                    "            base_py = cand",
+                    "            break",
+                    "    except Exception:",
+                    "        pass",
+                    "assert base_py, f'BASE_PYTHON_NOT_FOUND:{py_minor}'",
+                    "if new_dir.exists():",
+                    "    shutil.rmtree(new_dir)",
+                    "new_dir.mkdir(parents=True, mode=0o755)",
+                    "for item in cur_real.iterdir():",
+                    "    if item.name in {'venv', '__pycache__'}:",
+                    "        continue",
+                    "    dst = new_dir / item.name",
+                    "    if item.is_dir():",
+                    "        shutil.copytree(item, dst, symlinks=True)",
+                    "    elif item.is_file():",
+                    "        shutil.copy2(item, dst)",
+                    "subprocess.run([base_py, '-m', 'venv', str(new_dir / 'venv')], check=True)",
+                    "pip_bin = str(new_dir / 'venv/bin/pip')",
+                    "pip_env = {'PATH': '/usr/bin:/bin', 'PIP_CONFIG_FILE': '/dev/null'}",
+                    "subprocess.run([",
+                    "    pip_bin, 'install', '--no-index', '--find-links',",
+                    "    str(up / 'wheelhouse'), '--upgrade', '--upgrade-strategy',",
+                    "    'only-if-needed', whl,",
+                    "], env=pip_env, check=True)",
+                    "subprocess.run([",
+                    "    pip_bin, 'install', '--no-index', '--no-deps', '--force-reinstall', whl,",
+                    "], env=pip_env, check=True)",
+                    "ver_cmd = 'import aiops_diagnostics; print(aiops_diagnostics.__version__)'",
+                    "inst_ver = subprocess.check_output([",
+                    "    str(new_dir / 'venv/bin/python'), '-c', ver_cmd,",
+                    "], text=True).strip()",
+                    "assert inst_ver == target_ver, f'INSTALLED_VER_MISMATCH:{inst_ver}'",
+                    "print(json.dumps({'pre_hashes': pre_hashes, 'old_release_dir': str(cur_real)}))",
+                ]
+            )
+            res = pinned_host.run_cmd(f"python3 -c {shlex.quote(install_py)}", timeout_sec=240)
+            if res.returncode != 0 or not _decode_output(res.stdout).strip():
+                raise WizardWorkerError("TARGET_ISOLATED_INSTALL_FAILED")
+            install_info = json.loads(_decode_output(res.stdout).strip().splitlines()[-1])
+            pre_hashes = dict(install_info.get("pre_hashes") or {})
+            old_release_dir = str(install_info.get("old_release_dir") or "")
     except Exception as exc:
-        return _fail(1, _err(exc, "TARGET_ISOLATED_INSTALL_FAILED"))
+        return _fail(
+            1, _err(exc, "TARGET_OCI_PULL_VERIFY_FAILED" if use_oci else "TARGET_ISOLATED_INSTALL_FAILED")
+        )
     _update(1, "passed")
 
     # Step 2: 对比并同步受控 Nginx 入口文件 + nginx -t 守卫（失败自动恢复，此时尚未重启服务）
@@ -2165,111 +2636,255 @@ def execute_environment_upgrade_job(
         return _fail(2, _err(exc, "CUSTOMER_NGINX_SYNC_FAILED"))
     _update(2, "passed")
 
-    # Step 3: 原子切换 current 软链、重启服务、/health + 零触碰 SHA 校验；任何异常自动回退
+    # Step 3: 原子切换容器镜像（或软链）、重启服务、/health + 零触碰 SHA 校验；任何异常自动回退
     _update(3, "running")
     try:
-        switch_py = "\n".join(
-            [
-                "import hashlib, json, os, shutil, subprocess, time, urllib.request",
-                "from pathlib import Path",
-                f"env = {env!r}",
-                f"port = {local_port}",
-                f"new_dir = Path({new_release_dir!r})",
-                f"old_dir = Path({old_release_dir!r})",
-                f"bak_dir = Path({bak_dir!r})",
-                f"api_domain = {api_domain!r}",
-                f"target_ver = {target_full_version!r}",
-                f"target_rev = {target_rev!r}",
-                f"app_sha = {pool_info['app_sha256']!r}",
-                f"nginx_changed = {nginx_changed!r}",
-                f"pre_hashes = {pre_hashes!r}",
-                f"stage = Path({stage_remote!r})",
-                "root = Path(f'/opt/aiops-access-{env}')",
-                "cur_link = root / 'current'",
-                "inst_f = root / 'installed.json'",
-                "old_inst = json.loads(inst_f.read_text(encoding='utf-8')) if inst_f.is_file() else {}",
-                "svc = f'aiops-access-{env}.service'",
-                "nginx_bin = shutil.which('nginx') or '/www/server/nginx/sbin/nginx'",
-                "def swap_link(target_p: Path):",
-                "    tmp_l = root / 'current.next'",
-                "    if tmp_l.exists() or tmp_l.is_symlink():",
-                "        tmp_l.unlink()",
-                "    tmp_l.symlink_to(target_p)",
-                "    os.replace(tmp_l, cur_link)",
-                "def rollback():",
-                "    swap_link(old_dir)",
-                "    if old_inst:",
-                "        inst_f.write_text(",
-                "            json.dumps(old_inst, ensure_ascii=False) + '\\n', encoding='utf-8'",
-                "        )",
-                "    if nginx_changed and bak_dir.is_dir():",
-                "        ext_p = Path(f'/www/server/panel/vhost/nginx/extension/{api_domain}')",
-                "        uconf_dst = ext_p / 'aiops-user-ingress.conf'",
-                "        pinc_dst = Path(f'/etc/aiops-access-{env}/environment-user-ingress-proxy.inc')",
-                "        if (bak_dir / 'aiops-user-ingress.conf').is_file():",
-                "            shutil.copy2(bak_dir / 'aiops-user-ingress.conf', uconf_dst)",
-                "        if (bak_dir / 'environment-user-ingress-proxy.inc').is_file():",
-                "            shutil.copy2(bak_dir / 'environment-user-ingress-proxy.inc', pinc_dst)",
-                "        subprocess.run([nginx_bin, '-t'], check=False)",
-                "        subprocess.run([nginx_bin, '-s', 'reload'], check=False)",
-                "    subprocess.run(['systemctl', 'restart', svc], check=False)",
-                "try:",
-                "    swap_link(new_dir)",
-                "    new_inst = dict(old_inst)",
-                "    new_inst['release'] = new_dir.name",
-                "    new_inst['version'] = target_ver",
-                "    new_inst['revision'] = target_rev",
-                "    new_inst['artifact_sha256'] = app_sha",
-                "    new_inst['previous_release'] = {",
-                "        'release_dir': str(old_dir),",
-                "        'version': str(old_inst.get('version') or ''),",
-                "        'revision': str(old_inst.get('revision') or ''),",
-                "        'nginx_backup_dir': str(bak_dir) if nginx_changed else '',",
-                "        'recorded_at': time.time(),",
-                "    }",
-                "    inst_f.write_text(",
-                "        json.dumps(new_inst, ensure_ascii=False) + '\\n', encoding='utf-8'",
-                "    )",
-                "    subprocess.run(['systemctl', 'restart', svc], check=True)",
-                "    health = {}",
-                "    for _ in range(25):",
-                "        try:",
-                "            with urllib.request.urlopen(",
-                "                f'http://127.0.0.1:{port}/health', timeout=3",
-                "            ) as r:",
-                "                body = json.loads(r.read().decode('utf-8'))",
-                "                ok_h = (",
-                "                    body.get('ok') is True",
-                "                    and body.get('version') == target_ver",
-                "                    and body.get('business_mutations') == 'disabled'",
-                "                )",
-                "                if ok_h:",
-                "                    health = body",
-                "                    break",
-                "        except Exception:",
-                "            pass",
-                "        time.sleep(1)",
-                "    assert health.get('version') == target_ver, 'HEALTH_VERIFY_FAILED'",
-                "    if nginx_changed:",
-                "        subprocess.run([nginx_bin, '-s', 'reload'], check=True)",
-                "    for p, h in pre_hashes.items():",
-                "        assert Path(p).is_file(), f'CONFIG_MISSING:{p}'",
-                "        cur_h = hashlib.sha256(Path(p).read_bytes()).hexdigest()",
-                "        assert cur_h == h, f'CONFIG_MODIFIED:{p}'",
-                "    shutil.rmtree(stage, ignore_errors=True)",
-                "    print(json.dumps({",
-                "        'ok': True,",
-                "        'untouched_config_verified': True,",
-                "        'health': health,",
-                "    }))",
-                "except Exception as exc:",
-                "    rollback()",
-                "    shutil.rmtree(stage, ignore_errors=True)",
-                "    raise SystemExit(f'AUTO_ROLLED_BACK:{exc}')",
-            ]
-        )
+        if use_oci:
+            rendered_ctr_env = container_registry.render_container_env(
+                env, target_image_ref, local_port, run_uid, run_gid
+            )
+            switch_py = "\n".join(
+                [
+                    "import hashlib, json, os, shutil, subprocess, time, urllib.request",
+                    "from pathlib import Path",
+                    f"env = {env!r}",
+                    f"port = {local_port}",
+                    f"bak_dir = Path({bak_dir!r})",
+                    f"api_domain = {api_domain!r}",
+                    f"target_ver = {target_full_version!r}",
+                    f"target_rev = {target_rev!r}",
+                    f"target_tag = {target_tag!r}",
+                    f"target_img_ref = {target_image_ref!r}",
+                    f"target_img_digest = {target_image_digest!r}",
+                    f"old_dir = {old_release_dir!r}",
+                    f"old_img_ref = {old_image_ref!r}",
+                    f"ctr_env_txt = {rendered_ctr_env!r}",
+                    f"nginx_changed = {nginx_changed!r}",
+                    f"pre_hashes = {pre_hashes!r}",
+                    f"stage = Path({stage_remote!r})",
+                    "root = Path(f'/opt/aiops-access-{env}')",
+                    "svc = f'aiops-access-{env}.service'",
+                    "unit_p = Path(f'/etc/systemd/system/{svc}')",
+                    "inst_f = root / 'installed.json'",
+                    "ctr_env_p = root / 'container.env'",
+                    "launcher_p = root / 'run-container.sh'",
+                    "old_inst = json.loads(inst_f.read_text(encoding='utf-8')) if inst_f.is_file() else {}",
+                    "old_mode = str(",
+                    "    old_inst.get('runtime_mode') or ('docker' if ctr_env_p.is_file() else 'venv')",
+                    ")",
+                    "bak_dir.mkdir(parents=True, exist_ok=True)",
+                    "os.chmod(bak_dir, 0o700)",
+                    "unit_bak = bak_dir / f'{svc}.bak'",
+                    "if unit_p.is_file():",
+                    "    shutil.copy2(unit_p, unit_bak)",
+                    "ctr_bak = bak_dir / 'container.env.bak'",
+                    "if ctr_env_p.is_file():",
+                    "    shutil.copy2(ctr_env_p, ctr_bak)",
+                    "nginx_bin = shutil.which('nginx') or '/www/server/nginx/sbin/nginx'",
+                    "def rollback():",
+                    "    if old_mode == 'docker' and ctr_bak.is_file():",
+                    "        shutil.copy2(ctr_bak, ctr_env_p)",
+                    "    else:",
+                    "        if unit_bak.is_file():",
+                    "            shutil.copy2(unit_bak, unit_p)",
+                    "            subprocess.run(['systemctl', 'daemon-reload'], check=False)",
+                    "        if ctr_env_p.is_file() and old_mode != 'docker':",
+                    "            ctr_env_p.unlink(missing_ok=True)",
+                    "    if old_inst:",
+                    "        inst_txt = json.dumps(old_inst, ensure_ascii=False) + '\\n'",
+                    "        inst_f.write_text(inst_txt, encoding='utf-8')",
+                    "    if nginx_changed and bak_dir.is_dir():",
+                    "        ext_p = Path(f'/www/server/panel/vhost/nginx/extension/{api_domain}')",
+                    "        uconf_dst = ext_p / 'aiops-user-ingress.conf'",
+                    "        pinc_dst = Path(f'/etc/aiops-access-{env}/environment-user-ingress-proxy.inc')",
+                    "        if (bak_dir / 'aiops-user-ingress.conf').is_file():",
+                    "            shutil.copy2(bak_dir / 'aiops-user-ingress.conf', uconf_dst)",
+                    "        if (bak_dir / 'environment-user-ingress-proxy.inc').is_file():",
+                    "            shutil.copy2(bak_dir / 'environment-user-ingress-proxy.inc', pinc_dst)",
+                    "        subprocess.run([nginx_bin, '-t'], check=False)",
+                    "        subprocess.run([nginx_bin, '-s', 'reload'], check=False)",
+                    "    subprocess.run(['systemctl', 'restart', svc], check=False)",
+                    "try:",
+                    "    shutil.copy2(stage / 'run-container.sh', launcher_p)",
+                    "    os.chmod(launcher_p, 0o755)",
+                    "    tmp_ce = root / 'container.env.next'",
+                    "    tmp_ce.write_text(ctr_env_txt, encoding='utf-8')",
+                    "    os.chmod(tmp_ce, 0o644)",
+                    "    os.replace(tmp_ce, ctr_env_p)",
+                    "    new_unit = (stage / svc).read_bytes()",
+                    "    cur_unit = unit_p.read_bytes() if unit_p.is_file() else b''",
+                    "    if new_unit != cur_unit:",
+                    "        tmp_u = Path(f'/etc/systemd/system/{svc}.next')",
+                    "        tmp_u.write_bytes(new_unit)",
+                    "        os.chmod(tmp_u, 0o644)",
+                    "        os.replace(tmp_u, unit_p)",
+                    "        subprocess.run(['systemctl', 'daemon-reload'], check=True)",
+                    "    new_inst = dict(old_inst)",
+                    "    new_inst['runtime_mode'] = 'docker'",
+                    "    new_inst['release'] = target_img_digest[:19]",
+                    "    new_inst['version'] = target_ver",
+                    "    new_inst['revision'] = target_rev",
+                    "    new_inst['tag'] = target_tag",
+                    "    new_inst['image_ref'] = target_img_ref",
+                    "    new_inst['image_digest'] = target_img_digest",
+                    "    prev_rec = {",
+                    "        'runtime_mode': old_mode,",
+                    "        'version': str(old_inst.get('version') or ''),",
+                    "        'revision': str(old_inst.get('revision') or ''),",
+                    "        'nginx_backup_dir': str(bak_dir) if nginx_changed else '',",
+                    "        'recorded_at': time.time(),",
+                    "    }",
+                    "    if old_mode == 'docker' and old_img_ref:",
+                    "        prev_rec['image_ref'] = old_img_ref",
+                    "        prev_rec['image_digest'] = str(old_inst.get('image_digest') or '')",
+                    "    else:",
+                    "        prev_rec['release_dir'] = old_dir",
+                    "        prev_rec['systemd_unit_backup'] = str(unit_bak) if unit_bak.is_file() else ''",
+                    "    new_inst['previous_release'] = prev_rec",
+                    "    inst_f.write_text(",
+                    "        json.dumps(new_inst, ensure_ascii=False) + '\\n', encoding='utf-8'",
+                    "    )",
+                    "    subprocess.run(['systemctl', 'restart', svc], check=True)",
+                    "    health = {}",
+                    "    for _ in range(30):",
+                    "        try:",
+                    "            with urllib.request.urlopen(",
+                    "                f'http://127.0.0.1:{port}/health', timeout=3",
+                    "            ) as r:",
+                    "                body = json.loads(r.read().decode('utf-8'))",
+                    "                ok_h = (",
+                    "                    body.get('ok') is True",
+                    "                    and body.get('version') == target_ver",
+                    "                    and body.get('business_mutations') == 'disabled'",
+                    "                )",
+                    "                if ok_h:",
+                    "                    health = body",
+                    "                    break",
+                    "        except Exception:",
+                    "            pass",
+                    "        time.sleep(1)",
+                    "    assert health.get('version') == target_ver, 'HEALTH_VERIFY_FAILED'",
+                    "    if nginx_changed:",
+                    "        subprocess.run([nginx_bin, '-s', 'reload'], check=True)",
+                    "    for p, h in pre_hashes.items():",
+                    "        assert Path(p).is_file(), f'CONFIG_MISSING:{p}'",
+                    "        cur_h = hashlib.sha256(Path(p).read_bytes()).hexdigest()",
+                    "        assert cur_h == h, f'CONFIG_MODIFIED:{p}'",
+                    "    shutil.rmtree(stage, ignore_errors=True)",
+                    "    print(json.dumps({",
+                    "        'ok': True, 'untouched_config_verified': True, 'health': health",
+                    "    }))",
+                    "except Exception as exc:",
+                    "    rollback()",
+                    "    shutil.rmtree(stage, ignore_errors=True)",
+                    "    raise SystemExit(f'AUTO_ROLLED_BACK:{exc}')",
+                ]
+            )
+        else:
+            switch_py = "\n".join(
+                [
+                    "import hashlib, json, os, shutil, subprocess, time, urllib.request",
+                    "from pathlib import Path",
+                    f"env = {env!r}",
+                    f"port = {local_port}",
+                    f"new_dir = Path({new_release_dir!r})",
+                    f"old_dir = Path({old_release_dir!r})",
+                    f"bak_dir = Path({bak_dir!r})",
+                    f"api_domain = {api_domain!r}",
+                    f"target_ver = {target_full_version!r}",
+                    f"target_rev = {target_rev!r}",
+                    f"app_sha = {pool_info['app_sha256']!r}",
+                    f"nginx_changed = {nginx_changed!r}",
+                    f"pre_hashes = {pre_hashes!r}",
+                    f"stage = Path({stage_remote!r})",
+                    "root = Path(f'/opt/aiops-access-{env}')",
+                    "cur_link = root / 'current'",
+                    "inst_f = root / 'installed.json'",
+                    "old_inst = json.loads(inst_f.read_text(encoding='utf-8')) if inst_f.is_file() else {}",
+                    "svc = f'aiops-access-{env}.service'",
+                    "nginx_bin = shutil.which('nginx') or '/www/server/nginx/sbin/nginx'",
+                    "def swap_link(target_p: Path):",
+                    "    tmp_l = root / 'current.next'",
+                    "    if tmp_l.exists() or tmp_l.is_symlink():",
+                    "        tmp_l.unlink()",
+                    "    tmp_l.symlink_to(target_p)",
+                    "    os.replace(tmp_l, cur_link)",
+                    "def rollback():",
+                    "    swap_link(old_dir)",
+                    "    if old_inst:",
+                    "        inst_f.write_text(",
+                    "            json.dumps(old_inst, ensure_ascii=False) + '\\n', encoding='utf-8'",
+                    "        )",
+                    "    if nginx_changed and bak_dir.is_dir():",
+                    "        ext_p = Path(f'/www/server/panel/vhost/nginx/extension/{api_domain}')",
+                    "        uconf_dst = ext_p / 'aiops-user-ingress.conf'",
+                    "        pinc_dst = Path(f'/etc/aiops-access-{env}/environment-user-ingress-proxy.inc')",
+                    "        if (bak_dir / 'aiops-user-ingress.conf').is_file():",
+                    "            shutil.copy2(bak_dir / 'aiops-user-ingress.conf', uconf_dst)",
+                    "        if (bak_dir / 'environment-user-ingress-proxy.inc').is_file():",
+                    "            shutil.copy2(bak_dir / 'environment-user-ingress-proxy.inc', pinc_dst)",
+                    "        subprocess.run([nginx_bin, '-t'], check=False)",
+                    "        subprocess.run([nginx_bin, '-s', 'reload'], check=False)",
+                    "    subprocess.run(['systemctl', 'restart', svc], check=False)",
+                    "try:",
+                    "    swap_link(new_dir)",
+                    "    new_inst = dict(old_inst)",
+                    "    new_inst['runtime_mode'] = 'venv'",
+                    "    new_inst['release'] = new_dir.name",
+                    "    new_inst['version'] = target_ver",
+                    "    new_inst['revision'] = target_rev",
+                    "    new_inst['artifact_sha256'] = app_sha",
+                    "    new_inst['previous_release'] = {",
+                    "        'runtime_mode': 'venv',",
+                    "        'release_dir': str(old_dir),",
+                    "        'version': str(old_inst.get('version') or ''),",
+                    "        'revision': str(old_inst.get('revision') or ''),",
+                    "        'nginx_backup_dir': str(bak_dir) if nginx_changed else '',",
+                    "        'recorded_at': time.time(),",
+                    "    }",
+                    "    inst_f.write_text(",
+                    "        json.dumps(new_inst, ensure_ascii=False) + '\\n', encoding='utf-8'",
+                    "    )",
+                    "    subprocess.run(['systemctl', 'restart', svc], check=True)",
+                    "    health = {}",
+                    "    for _ in range(25):",
+                    "        try:",
+                    "            with urllib.request.urlopen(",
+                    "                f'http://127.0.0.1:{port}/health', timeout=3",
+                    "            ) as r:",
+                    "                body = json.loads(r.read().decode('utf-8'))",
+                    "                ok_h = (",
+                    "                    body.get('ok') is True",
+                    "                    and body.get('version') == target_ver",
+                    "                    and body.get('business_mutations') == 'disabled'",
+                    "                )",
+                    "                if ok_h:",
+                    "                    health = body",
+                    "                    break",
+                    "        except Exception:",
+                    "            pass",
+                    "        time.sleep(1)",
+                    "    assert health.get('version') == target_ver, 'HEALTH_VERIFY_FAILED'",
+                    "    if nginx_changed:",
+                    "        subprocess.run([nginx_bin, '-s', 'reload'], check=True)",
+                    "    for p, h in pre_hashes.items():",
+                    "        assert Path(p).is_file(), f'CONFIG_MISSING:{p}'",
+                    "        cur_h = hashlib.sha256(Path(p).read_bytes()).hexdigest()",
+                    "        assert cur_h == h, f'CONFIG_MODIFIED:{p}'",
+                    "    shutil.rmtree(stage, ignore_errors=True)",
+                    "    print(json.dumps({",
+                    "        'ok': True,",
+                    "        'untouched_config_verified': True,",
+                    "        'health': health,",
+                    "    }))",
+                    "except Exception as exc:",
+                    "    rollback()",
+                    "    shutil.rmtree(stage, ignore_errors=True)",
+                    "    raise SystemExit(f'AUTO_ROLLED_BACK:{exc}')",
+                ]
+            )
         sw_res = pinned_host.run_cmd(f"python3 -c {shlex.quote(switch_py)}", timeout_sec=120)
-        if sw_res.returncode != 0 or not sw_res.stdout.strip():
+        if sw_res.returncode != 0 or not _decode_output(sw_res.stdout).strip():
             raise WizardWorkerError("TARGET_SWITCH_VERIFY_ROLLED_BACK")
     except Exception as exc:
         return _fail(
@@ -2302,6 +2917,9 @@ def execute_environment_upgrade_job(
                 "from_version": before_probe["current_version"],
                 "to_version": after_probe["current_version"],
                 "target_tag": target_tag,
+                "distribution_mode": "oci" if use_oci else "legacy_tarball",
+                "runtime_mode": "docker" if use_oci else "venv",
+                "image_digest": target_image_digest if use_oci else "",
                 "nginx_changed": nginx_changed,
                 "untouched_config_verified": True,
                 "rolled_back_automatically": False,
@@ -2322,7 +2940,7 @@ def execute_environment_rollback_job(
     pinned_factory: Callable[..., PinnedCustomerHost] | None = None,
     public_smoke_fn: Callable[[str, str], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """一键将客户机安全回滚到 installed.json 记录的上一已验证版本（含 Nginx 备份恢复）。"""
+    """安全回滚到 installed.json 记录的上一版（支持 docker/venv 双向）。"""
     job_id = str(job["job_id"])
     req = dict(job.get("request") or {})
     env = str(job["environment"])
@@ -2372,32 +2990,55 @@ def execute_environment_rollback_job(
         local_port = int(before_probe["port"])
         check_py = "\n".join(
             [
-                "import json, subprocess",
+                "import json, os, subprocess",
                 "from pathlib import Path",
                 f"env = {env!r}",
                 "root = Path(f'/opt/aiops-access-{env}')",
                 "inst = json.loads((root / 'installed.json').read_text(encoding='utf-8'))",
                 "prev = inst.get('previous_release') or {}",
-                "prev_dir = Path(str(prev.get('release_dir') or ''))",
-                "assert prev_dir.is_dir(), 'PREVIOUS_RELEASE_MISSING'",
-                "assert (prev_dir / 'venv/bin/aiops-gateway').is_file(), 'PREVIOUS_RELEASE_MISSING'",
-                "ver_cmd = 'import aiops_diagnostics; print(aiops_diagnostics.__version__)'",
-                "prev_ver = subprocess.check_output(",
-                "    [str(prev_dir / 'venv/bin/python'), '-c', ver_cmd], text=True",
-                ").strip()",
+                "prev_mode = str(prev.get('runtime_mode') or 'venv')",
                 "bak_raw = str(prev.get('nginx_backup_dir') or '')",
-                "print(json.dumps({",
-                "    'prev_ver': prev_ver,",
-                "    'prev_rev': str(prev.get('revision') or ''),",
-                "    'prev_dir': str(prev_dir),",
-                "    'has_nginx_bak': bool(bak_raw and Path(bak_raw).is_dir()),",
-                "}))",
+                "dcfg_dir = Path(f'/etc/aiops-access-{env}/docker-config')",
+                "d_env = dict(os.environ)",
+                "if (dcfg_dir / 'config.json').is_file():",
+                "    d_env['DOCKER_CONFIG'] = str(dcfg_dir)",
+                "if prev_mode == 'docker':",
+                "    prev_img = str(prev.get('image_ref') or '').strip()",
+                "    assert prev_img, 'PREVIOUS_RELEASE_MISSING'",
+                "    insp = subprocess.run(['docker', 'image', 'inspect', prev_img], capture_output=True)",
+                "    if insp.returncode != 0:",
+                "        subprocess.run(['docker', 'pull', prev_img], env=d_env, check=True)",
+                "    prev_ver = str(prev.get('version') or '')",
+                "    assert prev_ver, 'PREVIOUS_RELEASE_MISSING'",
+                "    print(json.dumps({",
+                "        'prev_mode': 'docker',",
+                "        'prev_ver': prev_ver,",
+                "        'prev_rev': str(prev.get('revision') or ''),",
+                "        'prev_img': prev_img,",
+                "        'prev_digest': str(prev.get('image_digest') or ''),",
+                "        'has_nginx_bak': bool(bak_raw and Path(bak_raw).is_dir()),",
+                "    }))",
+                "else:",
+                "    prev_dir = Path(str(prev.get('release_dir') or ''))",
+                "    assert prev_dir.is_dir(), 'PREVIOUS_RELEASE_MISSING'",
+                "    assert (prev_dir / 'venv/bin/aiops-gateway').is_file(), 'PREVIOUS_RELEASE_MISSING'",
+                "    ver_cmd = 'import aiops_diagnostics; print(aiops_diagnostics.__version__)'",
+                "    prev_ver = subprocess.check_output(",
+                "        [str(prev_dir / 'venv/bin/python'), '-c', ver_cmd], text=True",
+                "    ).strip()",
+                "    print(json.dumps({",
+                "        'prev_mode': 'venv',",
+                "        'prev_ver': prev_ver,",
+                "        'prev_rev': str(prev.get('revision') or ''),",
+                "        'prev_dir': str(prev_dir),",
+                "        'has_nginx_bak': bool(bak_raw and Path(bak_raw).is_dir()),",
+                "    }))",
             ]
         )
-        chk_res = pinned_host.run_cmd(f"python3 -c {shlex.quote(check_py)}", timeout_sec=30)
-        if chk_res.returncode != 0 or not chk_res.stdout.strip():
+        chk_res = pinned_host.run_cmd(f"python3 -c {shlex.quote(check_py)}", timeout_sec=90)
+        if chk_res.returncode != 0 or not _decode_output(chk_res.stdout).strip():
             raise WizardWorkerError("ENVIRONMENT_ROLLBACK_UNAVAILABLE")
-        prev_info = json.loads(chk_res.stdout.strip().splitlines()[-1])
+        prev_info = json.loads(_decode_output(chk_res.stdout).strip().splitlines()[-1])
         target_prev_ver = str(prev_info["prev_ver"])
     except Exception as exc:
         return _fail(0, _err(exc, "ENVIRONMENT_ROLLBACK_UNAVAILABLE"))
@@ -2412,7 +3053,7 @@ def execute_environment_rollback_job(
     try:
         rb_py = "\n".join(
             [
-                "import hashlib, json, os, shutil, subprocess, time, urllib.request",
+                "import hashlib, json, os, pwd, shutil, subprocess, time, urllib.request",
                 "from pathlib import Path",
                 f"env = {env!r}",
                 f"port = {local_port}",
@@ -2428,14 +3069,51 @@ def execute_environment_rollback_job(
                 "inst_f = root / 'installed.json'",
                 "inst = json.loads(inst_f.read_text(encoding='utf-8'))",
                 "prev = inst['previous_release']",
-                "prev_dir = Path(str(prev['release_dir']))",
+                "prev_mode = str(prev.get('runtime_mode') or 'venv')",
                 "bak_raw = str(prev.get('nginx_backup_dir') or '')",
                 "bak_dir = Path(bak_raw) if bak_raw else None",
-                "tmp_l = root / 'current.next'",
-                "if tmp_l.exists() or tmp_l.is_symlink():",
-                "    tmp_l.unlink()",
-                "tmp_l.symlink_to(prev_dir)",
-                "os.replace(tmp_l, cur_link)",
+                "svc = f'aiops-access-{env}.service'",
+                "unit_p = Path(f'/etc/systemd/system/{svc}')",
+                "ctr_env_p = root / 'container.env'",
+                "new_inst = dict(inst)",
+                "if prev_mode == 'docker':",
+                "    prev_img = str(prev['image_ref'])",
+                "    pw = pwd.getpwnam(f'aiops-access-{env}')",
+                "    ce_lines = [",
+                "        f'ENV_NAME={env}',",
+                "        f'IMAGE_REF={prev_img}',",
+                "        f'LOCAL_PORT={port}',",
+                "        f'RUN_UID={pw.pw_uid}',",
+                "        f'RUN_GID={pw.pw_gid}',",
+                "        '',",
+                "    ]",
+                "    tmp_ce = root / 'container.env.next'",
+                "    tmp_ce.write_text('\\n'.join(ce_lines), encoding='utf-8')",
+                "    os.chmod(tmp_ce, 0o644)",
+                "    os.replace(tmp_ce, ctr_env_p)",
+                "    fallback_d = prev_img.split('@', 1)[1] if '@' in prev_img else ''",
+                "    prev_digest = str(prev.get('image_digest') or fallback_d)",
+                "    new_inst['runtime_mode'] = 'docker'",
+                "    new_inst['release'] = prev_digest[:19]",
+                "    new_inst['image_ref'] = prev_img",
+                "    new_inst['image_digest'] = prev_digest",
+                "else:",
+                "    prev_dir = Path(str(prev['release_dir']))",
+                "    tmp_l = root / 'current.next'",
+                "    if tmp_l.exists() or tmp_l.is_symlink():",
+                "        tmp_l.unlink()",
+                "    tmp_l.symlink_to(prev_dir)",
+                "    os.replace(tmp_l, cur_link)",
+                "    unit_bak_raw = str(prev.get('systemd_unit_backup') or '')",
+                "    if unit_bak_raw and Path(unit_bak_raw).is_file():",
+                "        shutil.copy2(unit_bak_raw, unit_p)",
+                "        subprocess.run(['systemctl', 'daemon-reload'], check=True)",
+                "    if ctr_env_p.is_file():",
+                "        ctr_env_p.unlink(missing_ok=True)",
+                "    new_inst['runtime_mode'] = 'venv'",
+                "    new_inst['release'] = prev_dir.name",
+                "    new_inst.pop('image_ref', None)",
+                "    new_inst.pop('image_digest', None)",
                 "nginx_bin = shutil.which('nginx') or '/www/server/nginx/sbin/nginx'",
                 "ngx_restored = False",
                 "if bak_dir and bak_dir.is_dir() and api_domain:",
@@ -2450,17 +3128,15 @@ def execute_environment_rollback_job(
                 "        ngx_restored = True",
                 "    if ngx_restored:",
                 "        subprocess.run([nginx_bin, '-t'], check=True)",
-                "new_inst = dict(inst)",
-                "new_inst['release'] = prev_dir.name",
                 "new_inst['version'] = target_ver",
                 "new_inst['revision'] = str(prev.get('revision') or '')",
                 "new_inst['previous_release'] = None",
                 "inst_f.write_text(",
                 "    json.dumps(new_inst, ensure_ascii=False) + '\\n', encoding='utf-8'",
                 ")",
-                "subprocess.run(['systemctl', 'restart', f'aiops-access-{env}.service'], check=True)",
+                "subprocess.run(['systemctl', 'restart', svc], check=True)",
                 "health = {}",
-                "for _ in range(25):",
+                "for _ in range(30):",
                 "    try:",
                 "        with urllib.request.urlopen(",
                 "            f'http://127.0.0.1:{port}/health', timeout=3",
@@ -2486,15 +3162,16 @@ def execute_environment_rollback_job(
                 "    assert cur_h == h, f'CONFIG_MODIFIED:{p}'",
                 "print(json.dumps({",
                 "    'ok': True,",
+                "    'runtime_mode': prev_mode,",
                 "    'nginx_restored': ngx_restored,",
                 "    'untouched_config_verified': True,",
                 "}))",
             ]
         )
         rb_res = pinned_host.run_cmd(f"python3 -c {shlex.quote(rb_py)}", timeout_sec=120)
-        if rb_res.returncode != 0 or not rb_res.stdout.strip():
+        if rb_res.returncode != 0 or not _decode_output(rb_res.stdout).strip():
             raise WizardWorkerError("TARGET_ROLLBACK_FAILED")
-        rb_info = json.loads(rb_res.stdout.strip().splitlines()[-1])
+        rb_info = json.loads(_decode_output(rb_res.stdout).strip().splitlines()[-1])
     except Exception as exc:
         return _fail(1, _err(exc, "TARGET_ROLLBACK_FAILED"))
     _update(1, "passed")
@@ -2520,6 +3197,7 @@ def execute_environment_rollback_job(
             "result": {
                 "from_version": before_probe["current_version"],
                 "to_version": after_probe["current_version"],
+                "runtime_mode": str(rb_info.get("runtime_mode") or after_probe.get("runtime_mode") or "venv"),
                 "nginx_changed": bool(rb_info.get("nginx_restored")),
                 "untouched_config_verified": True,
                 "smoke_passed": True,

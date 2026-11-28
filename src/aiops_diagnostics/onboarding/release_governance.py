@@ -21,7 +21,13 @@ from aiops_diagnostics.common.private_files import (
     validate_private_file,
     write_private_text,
 )
-from aiops_diagnostics.onboarding import artifact_pool, host_enrollment, registry, wizard_jobs
+from aiops_diagnostics.onboarding import (
+    artifact_pool,
+    container_registry,
+    host_enrollment,
+    registry,
+    wizard_jobs,
+)
 
 RELEASE_CATALOG_SCHEMA = "aiops-release-catalog/1"
 ENV_RELEASE_STATE_SCHEMA = "aiops-environment-releases/1"
@@ -113,6 +119,22 @@ def save_release_catalog(assets_dir: Path, entries: list[dict[str, Any]]) -> dic
                 if str(m).strip() in artifact_pool.SUPPORTED_PYTHON_MINORS
             }
         )
+        raw_img_ref = str(clean.get("image_ref") or "").strip()
+        if raw_img_ref and container_registry.is_valid_image_ref(raw_img_ref):
+            reg_host, reg_repo, img_digest = container_registry.validate_image_ref(raw_img_ref)
+            clean["image_ref"] = raw_img_ref
+            clean["image_digest"] = img_digest
+            clean["image_repo"] = f"{reg_host}/{reg_repo}"
+            clean["image_tag"] = str(clean.get("image_tag") or tag)
+            clean["image_ready"] = True
+            clean["distribution_mode"] = "oci"
+        else:
+            clean["image_ref"] = ""
+            clean["image_digest"] = ""
+            clean["image_repo"] = ""
+            clean["image_tag"] = ""
+            clean["image_ready"] = False
+            clean["distribution_mode"] = "legacy_tarball"
         sanitized.append(clean)
 
     ensure_private_directory(assets_dir)
@@ -156,6 +178,8 @@ def save_environment_release_state(
             "version": str(rollback.get("version") or ""),
             "revision": str(rollback.get("revision") or ""),
             "release_name": str(rollback.get("release_name") or ""),
+            "runtime_mode": str(rollback.get("runtime_mode") or ""),
+            "image_digest": str(rollback.get("image_digest") or ""),
             "recorded_at": rollback.get("recorded_at"),
             "has_nginx_backup": bool(rollback.get("has_nginx_backup")),
         }
@@ -219,6 +243,7 @@ def collect_git_annotated_releases(
     repo_root: Path,
     *,
     pool_entries: list[dict[str, Any]] | None = None,
+    image_entries: dict[str, dict[str, Any]] | None = None,
     limit: int = 20,
 ) -> list[dict[str, Any]]:
     """从仓库收集 origin/main 祖先上的官方不可变注释 SemVer 标签。"""
@@ -274,6 +299,8 @@ def collect_git_annotated_releases(
         )
 
         version = tag[1:]
+        img_meta = (image_entries or {}).get(revision) if isinstance(image_entries, dict) else None
+        clean_img = container_registry.sanitize_image_descriptor(img_meta) if img_meta else None
         releases.append(
             {
                 "tag": tag,
@@ -286,6 +313,12 @@ def collect_git_annotated_releases(
                 "ingress_routes": ingress_routes,
                 "ingress_sha256": ingress_sha256,
                 "pool_python_minors": sorted(pool_by_rev.get(revision, set())),
+                "image_ref": clean_img["image_ref"] if clean_img else "",
+                "image_digest": clean_img["image_digest"] if clean_img else "",
+                "image_repo": clean_img["image_repo"] if clean_img else "",
+                "image_tag": clean_img["image_tag"] if clean_img else "",
+                "image_ready": bool(clean_img),
+                "distribution_mode": "oci" if clean_img else "legacy_tarball",
             }
         )
         if len(releases) >= limit:
@@ -368,6 +401,8 @@ def build_release_overview(
             target_sha=str(entry.get("ingress_sha256") or ""),
         )
         # 若当前主机记录的网关版本与目标完整版本相同但缺 ingress sha（老手工升级），仍允许对比路由列表。
+        img_ref = str(entry.get("image_ref") or "").strip()
+        img_ready = container_registry.is_valid_image_ref(img_ref)
         catalog_entries.append(
             {
                 "tag": entry["tag"],
@@ -380,6 +415,12 @@ def build_release_overview(
                 "ingress_routes": list(entry.get("ingress_routes") or []),
                 "ingress_diff": diff,
                 "pool_python_minors": minors,
+                "image_ref": img_ref if img_ready else "",
+                "image_digest": str(entry.get("image_digest") or "") if img_ready else "",
+                "image_repo": str(entry.get("image_repo") or "") if img_ready else "",
+                "image_tag": str(entry.get("image_tag") or "") if img_ready else "",
+                "image_ready": img_ready,
+                "distribution_mode": "oci" if img_ready else "legacy_tarball",
             }
         )
 
@@ -402,6 +443,12 @@ def build_release_overview(
         "current_version": current_version,
         "current_revision": current_revision,
         "python_minor": str(env_state.get("python_minor") or ""),
+        "runtime_mode": str(
+            env_state.get("runtime_mode") or ("venv" if current_version and not is_control else "")
+        ),
+        "current_image_digest": str(env_state.get("current_image_digest") or ""),
+        "current_image_ref": str(env_state.get("current_image_ref") or ""),
+        "docker_available": env_state.get("docker_available"),
         "business_mutations": str(
             env_state.get("business_mutations") or ("disabled" if current_version else "")
         ),

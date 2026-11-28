@@ -23,12 +23,20 @@ type ReleaseCatalogEntry = {
   ingress_routes: string[]
   ingress_diff: IngressDiff
   pool_python_minors: string[]
+  image_ref?: string
+  image_digest?: string
+  image_repo?: string
+  image_tag?: string
+  image_ready?: boolean
+  distribution_mode?: 'oci' | 'legacy_tarball'
 }
 
 type RollbackTarget = {
   version: string
   revision: string
   release_name: string
+  runtime_mode?: string
+  image_digest?: string
   recorded_at: number | null
   has_nginx_backup: boolean
 }
@@ -71,6 +79,10 @@ type ReleaseOverview = {
   current_version: string
   current_revision: string
   python_minor: string
+  runtime_mode?: 'docker' | 'venv' | ''
+  current_image_digest?: string
+  current_image_ref?: string
+  docker_available?: boolean | null
   business_mutations: string
   health_ok: boolean | null
   last_probed_at: number | null
@@ -84,13 +96,13 @@ type ReleaseOverview = {
 }
 
 const STEP_TITLES: Record<string, string> = {
-  probe_target: '探测线上健康与入口',
-  resolve_artifact: '校验官方标签与离线制品',
-  install_release: '隔离目录离线安装 venv',
+  probe_target: '探测线上健康、运行态与入口',
+  resolve_artifact: '校验官方标签与不可变镜像摘要',
+  install_release: '国内镜像仓拉取镜像并预检',
   sync_nginx_ingress: '对比同步受控 Nginx 入口并 nginx -t',
-  switch_and_verify: '原子切换软链、重启核验并检测配置零改动',
+  switch_and_verify: '原子切换容器镜像、重启核验并检测配置零改动',
   public_smoke: '公网 HTTPS 401/200 冒烟验证',
-  verify_previous_release: '核对上一版本目录与备份完整性',
+  verify_previous_release: '核对上一版本镜像/目录与备份完整性',
 }
 
 const ACTION_TITLES: Record<string, string> = {
@@ -222,7 +234,7 @@ export default function EnvironmentReleasesPanel({
       if (done?.passed) {
         setNotice(`已同步 ${environmentName || environment} 最新运行版本与 Nginx 入口状态`)
       } else if (done?.state === 'running' || done?.state === 'queued') {
-        setNotice('后台任务仍在执行中（跨区传输离线包耗时较长），请稍候点击「刷新实时版本」查看最终结果')
+        setNotice('后台任务仍在执行中，请稍候点击「刷新实时版本」查看最终结果')
       } else {
         setError(`实时版本探测失败：${done?.error_code || '请检查目标主机连通性'}`)
       }
@@ -254,7 +266,7 @@ export default function EnvironmentReleasesPanel({
           `升级完成：${done.to_version || selectedTag} 已就绪且公网冒烟通过（客户配置零触碰核验通过）`,
         )
       } else if (done?.state === 'running' || done?.state === 'queued') {
-        setNotice('后台任务仍在执行中（跨区传输离线包耗时较长），请稍候点击「刷新实时版本」查看最终结果')
+        setNotice('后台任务仍在执行中，请稍候点击「刷新实时版本」查看最终结果')
       } else {
         const rbTip = done?.rolled_back_automatically ? '；系统已自动切回原版本兜底' : ''
         setError(`升级阻断（${done?.failed_step || done?.error_code || '未知错误'}）${rbTip}`)
@@ -281,7 +293,7 @@ export default function EnvironmentReleasesPanel({
       if (done?.passed) {
         setNotice(`已安全回滚至上一版本 ${done.to_version || ''} 并完成 /health 与公网冒烟校验`)
       } else if (done?.state === 'running' || done?.state === 'queued') {
-        setNotice('后台任务仍在执行中（跨区传输离线包耗时较长），请稍候点击「刷新实时版本」查看最终结果')
+        setNotice('后台任务仍在执行中，请稍候点击「刷新实时版本」查看最终结果')
       } else {
         setError(`回滚失败：${done?.failed_step || done?.error_code || '请检查主机状态'}`)
       }
@@ -413,7 +425,13 @@ export default function EnvironmentReleasesPanel({
                 }`}
               />
               <span>
-                {overview?.python_minor ? `Python ${overview.python_minor}` : '待探测'}
+                {overview?.runtime_mode === 'docker'
+                  ? `Docker 容器 · ${overview?.current_image_digest ? overview.current_image_digest.slice(0, 19) : '不可变镜像'}`
+                  : overview?.runtime_mode === 'venv'
+                    ? `Python ${overview?.python_minor || '3.12'} venv（支持平滑切容器）`
+                    : overview?.python_minor
+                      ? `Python ${overview.python_minor}`
+                      : '待探测'}
                 {overview?.health_ok === true
                   ? ' · 健康正常'
                   : overview?.health_ok === false
@@ -510,11 +528,11 @@ export default function EnvironmentReleasesPanel({
                 </span>
                 <div className="space-y-1">
                   <h4 className="system-md-semibold text-text-primary">无损原地滚动升级</h4>
-                  <p className="system-xs-regular text-text-tertiary">
-                    仅可选 <code className="font-mono">main</code> 上带不可变注释标签（
-                    <code className="font-mono">vX.Y.Z</code>
-                    ）的官方正式版；自动匹配离线包、同步受控 Nginx 入口并校验配置零触碰。
-                  </p>
+                    <p className="system-xs-regular text-text-tertiary">
+                      仅可选 <code className="font-mono">main</code> 上带不可变注释标签（
+                      <code className="font-mono">vX.Y.Z</code>
+                      ）的官方正式版；优先从阿里云 ACR 拉取不可变容器镜像并同步受控 Nginx 入口。
+                    </p>
                 </div>
               </div>
 
@@ -673,6 +691,15 @@ export default function EnvironmentReleasesPanel({
                                         含 Nginx 更新
                                       </span>
                                     )}
+                                    {item.image_ready ? (
+                                      <span className="rounded-full bg-components-badge-bg-green-soft px-1.5 py-0.5 font-mono text-[10px] font-medium text-text-success">
+                                        OCI {item.image_digest ? item.image_digest.slice(0, 14) : '已就绪'}
+                                      </span>
+                                    ) : (
+                                      <span className="rounded-full bg-background-section-burn px-1.5 py-0.5 text-[10px] font-medium text-text-tertiary">
+                                        离线包兜底
+                                      </span>
+                                    )}
                                   </div>
                                   <p className="line-clamp-2 text-[11px] leading-snug text-text-secondary">
                                     {item.summary || '正式发布版'}
@@ -698,6 +725,11 @@ export default function EnvironmentReleasesPanel({
                         <strong className="font-mono text-text-primary">
                           {selectedRelease.full_version}
                         </strong>
+                        {selectedRelease.image_ready && selectedRelease.image_digest && (
+                          <span className="ml-2 font-mono text-[10px] text-text-success">
+                            [{selectedRelease.image_digest.slice(0, 19)}]
+                          </span>
+                        )}
                         {selectedRelease.summary ? ` — ${selectedRelease.summary}` : ''}
                       </span>
                       {selectedRelease.released_at && (
@@ -845,8 +877,7 @@ export default function EnvironmentReleasesPanel({
                 <div className="space-y-1">
                   <h4 className="system-md-semibold text-text-primary">一键安全回滚</h4>
                   <p className="system-xs-regular text-text-tertiary">
-                    切换 <code className="font-mono">current</code>{' '}
-                    软链回退至上一隔离发布目录并还原对应 Nginx 备份，不影响业务库与租户路由。
+                    切换上一版本容器镜像摘要或恢复隔离发布目录并还原对应 Nginx 备份，不影响业务库与租户路由。
                   </p>
                 </div>
               </div>

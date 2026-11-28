@@ -822,6 +822,8 @@ def _dispatch_release_action(
                 "target_revision": str(selected["revision"]),
                 "target_version": str(selected["version"]),
                 "target_full_version": str(selected["full_version"]),
+                "target_image_ref": str(selected.get("image_ref") or ""),
+                "target_image_digest": str(selected.get("image_digest") or ""),
                 "gateway_url": gateway_url,
                 "api_domain": api_domain,
                 "tenant_id": tenant_id,
