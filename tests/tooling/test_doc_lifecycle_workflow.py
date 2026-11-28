@@ -46,6 +46,23 @@ def test_doc_lifecycle_workflow_shape_permissions_and_pinned_actions() -> None:
             assert "${{" not in str(step.get("run", "")), "Avoid expression injection inside run scripts"
 
 
+def test_doc_lifecycle_serializes_ledger_writers_without_cancelling_pr_checks() -> None:
+    data = _load_workflow()
+    assert "concurrency" not in data
+    pr_job = data["jobs"]["pr-check"]
+    assert pr_job["concurrency"] == {
+        "group": "doc-lifecycle-pr-${{ github.ref }}",
+        "cancel-in-progress": True,
+    }
+    weekly_job = data["jobs"]["weekly-autovacuum"]
+    assert weekly_job["if"] == "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'"
+    assert weekly_job["concurrency"] == {
+        "group": "doc-lifecycle-maintenance-ledger",
+        "cancel-in-progress": False,
+        "queue": "max",
+    }
+
+
 def _run_sync_step(
     tmp_path: Path,
     *,

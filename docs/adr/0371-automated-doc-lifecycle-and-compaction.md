@@ -25,6 +25,7 @@ status: active
    - 将先存后删、SHA-256 校验、`MANIFEST.sha256`/`ARCHIVE_LIST.json` 更新、固定 `<ARCHIVE_SHA>` permalink 改写、`docs/adr-index.md` 与 `docs/doc-lifecycle.json` 同步封装为带 `--dry-run` / `--apply` 与 Legal Hold 保护的标准 CLI。
 4. **GitHub Actions 闭环自动化（`.github/workflows/doc-lifecycle.yml`，Phase 3）**：
    - PR 触发 `check-pr` 写入 Step Summary 并拦截硬错误；每周日定时触发 `audit` 幂等维护唯一一张滚动维护 Issue（清零时自动关闭），绝不无人值守直接删除主分支文档。
+   - 定时与手动巡检共用仓库级并发组，排队更新同一张台账，不中断现有巡检；PR 门禁仍按各自 PR 串行并取消过期检查。
 
 ## 备选方案
 
