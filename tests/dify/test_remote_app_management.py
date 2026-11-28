@@ -531,3 +531,37 @@ def test_node_all_targets_ignores_remote_environment_operator_apps(
     )
     loaded = node_publication.all_targets(settings)
     assert [t.app_id for t in loaded] == ["137cc417-f068-43c2-9d4a-43ebd254ea01"]
+
+
+def test_run_remote_app_command_shell_quotes_json_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SSH 远端命令由远端 sh 解析，JSON payload 必须整体 shlex.quote 防止按空格拆参。"""
+    import shlex
+    import subprocess
+
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        remote_app_management.host_enrollment,
+        "load_enrolled_host_connection",
+        lambda reg_path, env: {"environment": env, "address": "127.0.0.1"},
+    )
+
+    def _fake_ssh(conn_info, remote_args, *, stdin_text=None, timeout=30.0):
+        captured["remote_args"] = remote_args
+        captured["stdin_len"] = len(stdin_text or "")
+        return subprocess.CompletedProcess(args=["ssh"], returncode=0, stdout='{"ok": true}\n', stderr="")
+
+    monkeypatch.setattr(remote_app_management.host_enrollment, "run_pinned_ssh", _fake_ssh)
+    ctx = SimpleNamespace(
+        settings=SimpleNamespace(environment_management_registry_file="/tmp/reg.json", environment="41")
+    )
+    out = remote_app_management.run_remote_app_command(
+        ctx, "jiejia", "app-state", {"environment": "jiejia", "prompt": "含 空格 与 '引号'"}
+    )
+    assert out == {"ok": True}
+    assert captured["stdin_len"] > 1000
+    args = captured["remote_args"]
+    assert isinstance(args, list) and len(args) == 1
+    parsed = shlex.split(args[0])
+    assert parsed[:3] == ["python3", "-", "app-state"]
+    assert json.loads(parsed[3]) == {"environment": "jiejia", "prompt": "含 空格 与 '引号'"}
