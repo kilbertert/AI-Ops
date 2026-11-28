@@ -1,6 +1,7 @@
 name: AFK Policy
 
-# PR 的交付与 AFK 边界检查；必需检查名 Workflow policy 保持稳定。
+# PR 的确定性交付与 ADR 边界检查；必需检查名 Workflow policy 保持稳定。
+# 重型 AFK 写码/评审沙箱流水线已退役，本工作流将在 Phase 2 收口至 fleet-kit@v1。
 
 on:
   pull_request:
@@ -33,29 +34,8 @@ jobs:
         uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
           node-version: 22
-          cache: npm
-      - name: Verify AFK workflow boundaries
-        run: node .sandcastle/policy-check.mjs workflows
-      - name: Verify reviewer verdict and execution boundary
-        run: |
-          npm ci --ignore-scripts --no-audit --no-fund
-          npx --no-install tsx .sandcastle/review-boundary.check.ts
-      - name: Verify staged delivery lifecycle
-        run: npx --no-install tsx .sandcastle/linked-issues.check.ts
-      - name: Verify runner cancellation signal
-        run: npx --no-install tsx .sandcastle/queue/cancellation.check.ts
-      - name: Verify sandbox network isolation
-        run: npx --no-install tsx .sandcastle/profile-network.check.ts
-      - name: Verify sandbox MCP config
-        run: npx --no-install tsx .sandcastle/mcp-config.check.ts
-      - name: Verify the sandbox image wiring
-        run: npx --no-install tsx .sandcastle/profile-image.check.ts
-      - name: Verify the console heartbeat filter
-        run: npx --no-install tsx .sandcastle/quiet-heartbeats.check.ts
       - name: Verify the repository map is current
         run: node .sandcastle/repo-map.check.mjs
-      - name: Verify the sandbox prepare hook
-        run: npx --no-install tsx .sandcastle/sandbox-prepare.check.ts
       - name: Verify decision records
         env:
           AFK_ADR_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
@@ -79,7 +59,7 @@ jobs:
           {
             echo '### 交付检查（Workflow policy）'
             echo "- 结果：$RESULT"
-            echo '- 本检查覆盖 AFK 隔离、工具自检与 ADR，不是模型审查。'
+            echo '- 本检查覆盖仓库地图、冲突面自检与 ADR，不是模型审查。'
             echo '- ADR 失败：先查看重复编号、缺失记录或提交中的 No-ADR 说明。'
             echo '- 操作入口见 docs/agents/actions-delivery.md。'
           } >> "$GITHUB_STEP_SUMMARY"
