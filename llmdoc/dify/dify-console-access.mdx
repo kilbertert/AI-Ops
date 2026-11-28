@@ -21,9 +21,6 @@ code:
     - services/dify-console-bridge/dify_console_bridge/__main__.py
     - services/dify-console-bridge/dify_console_bridge/environments.py
     - services/dify-login-proxy/dify_login_proxy/__main__.py
-    - ops/dify-console-bridge/aiops-dify-console-bridge.service
-    - ops/dify-console-bridge/deploy.sh
-    - ops/dify-login-proxy/aiops-dify-login-proxy.service
     - src/aiops_diagnostics/common/platform_constants.py
     - src/aiops_diagnostics/common/http_auth.py
     - src/aiops_diagnostics/dify/dify_console_admin.py
@@ -34,9 +31,11 @@ code:
     - src/aiops_diagnostics/dify/dify_tenant_access.py
     - src/aiops_diagnostics/dify/dify_inner_api.py
     - src/aiops_diagnostics/gateway/gateway_schema.py
+    - deploy/dify-36/edge/Dockerfile
+    - deploy/dify-36/edge/deploy-edge-image.sh
+    - deploy/dify-36/ARCHITECTURE.md
     - deploy/dify-36/web-patches/**
     - ops/dify-console-bridge/README.md
-    - ops/dify-console-bridge/build-bundle.sh
     - ops/dify-console-bridge/build-service-api-bundle.sh
     - ops/dify-console-bridge/dify-service-api-TLS.conf
     - ops/dify-console-bridge/service-api-deploy.sh
@@ -90,12 +89,12 @@ code:
 ## Bridge（BFF 人机分离）
 
 - `dify_console_bridge` 包：先验人（Dify 会话 cookie+CSRF+工作区角色），再以机器身份用共享发布 key 调网关。Origin/Sec-Fetch/Referer 是请求上下文（反 CSRF），**从不是授权**；`app_id` 从 Referer 路径取；上游重定向不跟；上游错误 `code` 重建进 `{"error":{code}}` 信封而不是按 HTTP status 猜（ADR-0064）。ADR-0344 把实现拆成 `config.py`（设置/路由常量）+`client.py`（出站 HTTP 与身份核验）+`workflows.py`（发布/试用编排）+薄 HTTP 层 `bridge.py`（兼容再导出）——找实质逻辑别再只盯 bridge.py。
-- **services/ 隔离边界**（ADR-0338）：bridge 与 login-proxy 是独立部署单元（`python -m dify_console_bridge`/`python -m dify_login_proxy`），源树里**不留转发壳**；`src/aiops_diagnostics/` 对两个服务包零反向依赖，反向（服务→src）只带 build-bundle 白名单内的 stdlib 兼容子集——桥跑系统 python 无 pydantic，进这个子集的 src 共享代码不许引第三方依赖。36 侧升级要求同修订制品 + systemd `ExecStart` 模块段迁移；Gateway CD 不覆盖 36 sidecar。
+- **services/ 隔离边界**（ADR-0338、ADR-0367、ADR-0369）：bridge 与 login-proxy 保留各自 Python 模块，在 36 上从同一个 `aiops-dify-edge@sha256` 镜像启动两个独立容器，分别使用 `aiopsbridge` 和 `aiopslogin` 身份，以及各自的环境文件和数据卷；发布桥不能读登录代理的密钥。旧 tar 打包脚本及这两个服务的宿主 systemd 单元已退役；升级走 [36 标准交付入口](../../deploy/dify-36/ARCHITECTURE.md)，Gateway CD 不覆盖 36。Inner API 转发器是独立宿主服务，不随这次退役。
 - 停用环境的业务拒止在桥侧落地：`/publish/check` 回 `business_admitted=false` 时除 `/__aiops/manage`（环境目录管理恢复面）外**全部桥路由 403**（"仅允许环境目录管理"）——目录管理员能进控制台做环境管理，但做不了业务发布/试用。
 - `AIOPS_CONSOLE_BRIDGE_LOGIN_PROXY_URL` 一键驱动三件事：发布授权、试用订单范围、审计发起者——设计上无半开状态（ADR-0028 §2）。配了但不可达：**共享 HTTP 入口统一拒绝**（ADR-0276——无法确认环境时绝不可回落默认 Gateway）；只有独立 `submit_trial` 调用保留 ADR-0028 的调试租户回落。桥另新增 `dify.raneli.work:10443` 受限 service-api 入口（`dify-service-api-TLS.conf`：来源 allowlist + 固定路径白名单 → `127.0.0.1:10018`，其余一律 404，`error_log /dev/null` 防查询串进日志）。
 - 控制台准入按工作区：租户账号进**自己**工作区不需全局权限码（隔离本身是闸）；平台共享工作区仍要全局 `aiops:agent:edit`/`aiops:agent:publish` 码（ADR-0139）。权限码是公司 UPMS 的两条 `sys_menu`+两个空角色（menu→role→user 模型）；`POST /menu` 自动授给 role_id=1，平台账号 system/huqq 因此持有发布——已接受、已审计（ADR-0029）。
 - 登录失败对用户只有一句中文，绝不回显密码/令牌/上游响应体；八种原因只在结构化 result-code 日志里区分（ADR-0053）。
-- 控制台 UI 注入有**两个互不知情的面**：编译期 React 补丁烤进 web 镜像（`deploy/dify-36/web-patches/`，webpack 重建纪律见 [delivery-and-hosts](../deployment/delivery-and-hosts.mdx)）vs 运行期 nginx 在 10008 层注入脚本（`dify-publish-button.js`/`operator-native-preview.js`，随 build-bundle 部署、不重建镜像）。改控制台界面先判定属于哪个面——两个面的受管标记各自实现，守卫要认并集（真事故）；选错面 = 白等一次镜像重建或改动根本到不了用户。
+- **控制台前端分两处交付**：Dify 编排页内嵌扩展由 `deploy/dify-36/web-patches/` 的 React 补丁编译进 `aiops-dify-web`；独立 `/aiops/*` 管理台由 `services/aiops-console/` 构建，随 `aiops-dify-edge` 的发布桥容器托管。10008 的 Nginx 仍负责反代，但旧 `sub_filter` 运行时 JS 注入已退役（ADR-0366、ADR-0368）；按 [变更归属速查](../../deploy/dify-36/ARCHITECTURE.md) 选择 Web 或 Edge 构建。
 
 ## Canonical anchors
 
