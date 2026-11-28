@@ -42,6 +42,7 @@
   bash deploy/dify-36/edge/deploy-edge-image.sh --image <AIOPS_DIFY_EDGE_IMAGE_REPO>@sha256:<64hex> --service all
   bash deploy/dify-36/edge/deploy-edge-image.sh --rollback --service all
   ```
+  升级失败触发自动回滚时，`AUTO_ROLLBACK_FAILED:<服务>` 表示该服务的恢复命令失败，需核对运行状态并人工恢复；脚本仍会尝试恢复其余侧边车，不会报告 `AUTO_ROLLED_BACK`。
 - **本地验证 OCI 构建**（不推送 ACR）：
   ```bash
   bash deploy/dify-36/edge/build-edge-image.sh

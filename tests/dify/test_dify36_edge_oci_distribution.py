@@ -10,6 +10,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -250,7 +251,10 @@ def test_release_dify_edge_workflow_contract_and_docs() -> None:
         assert "ARCHITECTURE.md" in readme.read_text(encoding="utf-8")
 
 
-def test_deploy_edge_isolates_identities_and_rolls_back_on_probe_failure(tmp_path: Path) -> None:
+@pytest.mark.parametrize("restore_status", [0, 1])
+def test_deploy_edge_isolates_identities_and_rolls_back_on_probe_failure(
+    tmp_path: Path, restore_status: int
+) -> None:
     new_ref = f"registry.example.test/release/edge@sha256:{'c' * 64}"
     state_dir = tmp_path / "edge-state"
     bin_dir = tmp_path / "bin"
@@ -275,7 +279,13 @@ set -eu
 echo "systemctl $*" >> "$OPS_LOG"
 case "$1" in
   is-active|is-enabled) exit 0 ;;
-  disable|enable) exit 0 ;;
+  enable)
+    if [[ "$*" == *"aiops-dify-console-bridge.service"* ]]; then
+      exit "$RESTORE_STATUS"
+    fi
+    exit 0
+    ;;
+  disable) exit 0 ;;
   *) exit 0 ;;
 esac
 """,
@@ -326,12 +336,21 @@ echo "502"
 
     res = subprocess.run(
         ["bash", str(DEPLOY_SH), "--image", new_ref, "--state-dir", str(state_dir)],
-        env={"PATH": f"{bin_dir}:{os.defpath}", "OPS_LOG": str(log_file)},
+        env={
+            "PATH": f"{bin_dir}:{os.defpath}",
+            "OPS_LOG": str(log_file),
+            "RESTORE_STATUS": str(restore_status),
+        },
         capture_output=True,
         text=True,
     )
     assert res.returncode != 0
-    assert "AUTO_ROLLED_BACK" in res.stderr
+    if restore_status:
+        assert "AUTO_ROLLBACK_FAILED:bridge" in res.stderr
+        assert "AUTO_ROLLED_BACK" not in res.stderr
+    else:
+        assert "AUTO_ROLLED_BACK" in res.stderr
+        assert "AUTO_ROLLBACK_FAILED" not in res.stderr
 
     log_txt = log_file.read_text(encoding="utf-8")
     # Strict runtime isolation checks for both containers
