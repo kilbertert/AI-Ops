@@ -223,8 +223,17 @@ from pathlib import Path
 state_p = Path(sys.argv[1])
 target_img, old_img, mode = sys.argv[2:5]
 prev_img = ""
-if mode != "rollback" and old_img and old_img != target_img:
-    prev_img = old_img
+if mode != "rollback" and old_img:
+    if old_img != target_img:
+        prev_img = old_img
+    else:
+        # 重部署同一摘要不应清掉已有的上一版本；只继承与当前镜像匹配的发布记录。
+        try:
+            previous_state = json.loads(state_p.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError):
+            previous_state = None
+        if isinstance(previous_state, dict) and previous_state.get("current_image") == target_img:
+            prev_img = str(previous_state.get("previous_image") or "")
 payload = {
     "schema": "aiops-dify-web-release/1",
     "current_image": target_img,
