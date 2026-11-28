@@ -48,9 +48,13 @@ from .provision import (
     DifyConsoleSettings,
     account_email_for,
     provision_editor,
+    provision_editor_with_nursery,
+    remove_nursery_member,
+    switch_active_workspace,
 )
 
 _LOGGER = logging.getLogger("aiops.dify_login_proxy.service")
+_ORIG_PROVISION_EDITOR = provision_editor
 
 #: 映射状态。``active`` 能登录；``disabled`` 是"公司侧已失权"的本地落点。
 #:
@@ -91,15 +95,17 @@ class LoginPolicy:
         *,
         tenant_account: bool,
         has_own_workspace: bool,
+        system_platform_override: bool = False,
     ) -> bool:
-        """控制台准入（ADR-0139）。
+        """控制台准入（ADR-0139 / ADR-0373）。
 
         两道门，按**进的是哪个 workspace** 分，不是按人分：
 
         * **租户自己的 workspace** —— 隔离本身就是那道门。他进去只看得见本租户的 app，
           碰不到别人的，所以不需要再要一个全局权限码。要求他只差"有自己那个 workspace"。
         * **平台共用 workspace** —— 所有平台账号同处一室、互相可见全部 app，那道门还在，
-          仍然要全局权限码。
+          仍然要全局权限码；受管客户环境因严守客户业务库只读不写入 ``aiops:agent:*``
+          菜单行，仅对 ``username == "system"`` 平台超管启用受控放行（ADR-0373）。
 
         ADR-0056 记的代价是「无法按租户授予编辑范围：`aiops:agent:edit` 是全局权限码」。
         多 workspace 落地之后这句话不再成立 —— 不是码变成租户级了，而是**它不再是那道门**。
@@ -107,20 +113,30 @@ class LoginPolicy:
         """
         if tenant_account and has_own_workspace:
             return True
+        if system_platform_override:
+            return True
         return self.may_edit(permissions)
 
     def may_publish(
-        self, permissions: tuple[str, ...], *, tenant_account: bool, has_own_workspace: bool
+        self,
+        permissions: tuple[str, ...],
+        *,
+        tenant_account: bool,
+        has_own_workspace: bool,
+        system_platform_override: bool = False,
     ) -> bool:
-        """发布权，**与准入同一条边界**（ADR-0139）。
+        """发布权，**与准入同一条边界**（ADR-0139 / ADR-0373）。
 
         租户账号在自己的 workspace 里发布：ADR-0073 已经把发布钉死在**发起人所在**的
-        workspace，跨租户在结构上发不出去。平台账号仍在共用 workspace 里，仍需全局码。
+        workspace，跨租户在结构上发不出去。平台账号仍在共用 workspace 里，仍需全局码；
+        受管客户环境仅对 ``username == "system"`` 平台超管放行。
 
         ``publish_permission`` 留空 ⇒ 该部署还没切到公司权限码 ⇒ 维持过渡行为（返回
         False，由调用方决定），与 :meth:`may_edit` 的空配置语义一致。
         """
         if tenant_account and has_own_workspace:
+            return True
+        if system_platform_override:
             return True
         return bool(self.publish_permission) and self.publish_permission in permissions
 
@@ -377,8 +393,10 @@ class LoginService:
         #: 理由：令牌不该比它所属的会话活得更久，也不该更短。
         operator_token_seconds: int | None = None,
         environment_registry: Any = None,
+        allow_system_platform_account: bool = False,
     ) -> None:
         self.environment_registry = environment_registry
+        self.allow_system_platform_account = allow_system_platform_account
         self.company = company
         self.dify = dify
         self.store = store
@@ -430,6 +448,15 @@ class LoginService:
             self.environment_registry.require(tenant_id)
         except RegistryError as exc:
             raise PermissionDenied("TENANT_ENVIRONMENT_NOT_ENABLED", "当前环境未开通此租户或已停用") from exc
+
+    def is_system_platform_override(self, *, username: str, user_type: str, tenant_id: str) -> bool:
+        """受管客户环境（不向客户 UPMS 写菜单行）仅放行 ``username == "system"`` 平台超管。"""
+        return bool(
+            self.allow_system_platform_account
+            and user_type == PLATFORM_USER_TYPE
+            and tenant_id == PLATFORM_USER_TYPE
+            and username == "system"
+        )
 
     def owner_session(self) -> ConsoleSession:
         return mint_console_session(
@@ -504,23 +531,25 @@ class LoginService:
         is_platform_account = user_type == PLATFORM_USER_TYPE
         workspace_tenant = DIFY_PLATFORM_WORKSPACE_ID if is_platform_account else identity.tenant_id
         workspace_id = ""
+        target_workspaces: tuple[str, ...] = ()
         workspace_lookup_error: Exception | None = None
         if self.workspace_directory is not None:
             from aiops_diagnostics.dify.dify_workspace_directory import WorkspaceUnavailable
 
-            # **平台账号落到它自己的平台 workspace**（#882）。`type=-1` 的账号不属于任何
-            # `sys_organ`，所以它没有可解析的租户 —— 不单独处理的话，多 workspace 一上线，
-            # 平台账号会发现"自己没有工作区"，登录直接变砖（而它正是应急入口）。
-            #
-            # 它的"可见全部"**不**通过进别人的 workspace 体现（ADR-0059 §4）：编辑面只在
-            # 自己的平台 workspace；跨租户可见性只体现在试运行的订单范围与发布审计上。
+            # **平台账号落到本环境可用工作区**（#882 / ADR-0373）。`type=-1` 的账号不属于任何
+            # 单一 `sys_organ`，在当前环境内可加入该环境平台及全部已启用租户工作区，但严禁跨环境混排。
             try:
-                workspace_id = self.workspace_directory.resolve(workspace_tenant)
+                if hasattr(self.workspace_directory, "resolve_all"):
+                    workspace_id, target_workspaces = self.workspace_directory.resolve_all(workspace_tenant)
+                else:
+                    workspace_id = self.workspace_directory.resolve(workspace_tenant)
+                    target_workspaces = (workspace_id,) if workspace_id else ()
             except WorkspaceUnavailable as exc:
                 # **不在这里抛**：它还可能是一个持全局码的平台账号，那种情况权限门才是
                 # 真正的答案。等门判完再决定报哪一个 —— 见下面的顺序说明。
                 workspace_lookup_error = exc
                 workspace_id = ""
+                target_workspaces = ()
 
         # 「租户账号」= 有真实租户 id 且不是平台哨兵。空租户 id 的账号（公司数据不完整）
         # 不当成租户账号：那种账号解析不出 workspace，放行只会让他进不去任何地方。
@@ -530,6 +559,11 @@ class LoginService:
         # 必须还是全局权限码 —— 否则一次配置缺省就把门整个拿掉了。
         tenant_account = bool(identity.tenant_id) and not is_platform_account
         has_own_workspace = bool(workspace_id)
+        system_override = self.is_system_platform_override(
+            username=identity.username,
+            user_type=user_type,
+            tenant_id=identity.tenant_id,
+        )
         if tenant_account and workspace_lookup_error is not None:
             # 租户账号的门**就是**他自己那个 workspace（ADR-0139），所以解析不到时正确答案
             # 是"你的工作区没准备好"＋那条命令，而不是"你缺权限"—— 后者会把他送到公司
@@ -539,6 +573,7 @@ class LoginService:
             permissions,
             tenant_account=tenant_account,
             has_own_workspace=has_own_workspace,
+            system_platform_override=system_override,
         ):
             # 失去准入 ⇒ **无论此前是什么状态**都拒绝登录。若此前是 active，就地
             # 置为 disabled 并记审计 —— 这一次登录就是撤权生效点（#779）。此后即使公司又给回
@@ -595,20 +630,33 @@ class LoginService:
                 identity.user_id,
             )
         # #883：workspace 已在上面的准入段解析（`workspace_id`），这里只做 join。
+        newly_provisioned = False
+        nursery_workspace_id = ""
         if not account_id:
-            account_id = provision_editor(
-                self.dify,
-                owner_session=self.owner_session(),
-                company_user_id=identity.user_id,
-                username=identity.username,
-            )
+            if workspace_id and self.inner_api is not None and provision_editor is _ORIG_PROVISION_EDITOR:
+                account_id, nursery_workspace_id = provision_editor_with_nursery(
+                    self.dify,
+                    owner_session=self.owner_session(),
+                    company_user_id=identity.user_id,
+                    username=identity.username,
+                )
+            else:
+                account_id = provision_editor(
+                    self.dify,
+                    owner_session=self.owner_session(),
+                    company_user_id=identity.user_id,
+                    username=identity.username,
+                )
+            newly_provisioned = True
 
         workspace_joined = False
+        already = False
         if workspace_id and self.inner_api is not None:
             already = (
                 existing is not None
                 and bool(existing.get("workspace_joined"))
                 and str(existing.get("workspace_id") or "") == workspace_id
+                and len(target_workspaces) <= 1
             )
             if already:
                 # 二次登录**不重复 join**（验收明写）。join 本身是幂等的，但每登录一次就
@@ -632,6 +680,22 @@ class LoginService:
                     action=outcome,
                     reason_code=workspace_id,
                 )
+                if workspace_joined:
+                    for extra_ws in target_workspaces:
+                        if extra_ws == workspace_id:
+                            continue
+                        extra_outcome = join_account(
+                            inner=self.inner_api,
+                            workspace_id=extra_ws,
+                            account_id=account_id,
+                            email=email,
+                        )
+                        self.store.record_audit(
+                            company_user_id=identity.user_id,
+                            dify_account_id=account_id,
+                            action=extra_outcome,
+                            reason_code=extra_ws,
+                        )
 
         # 解封：此前 disabled 而现在又有编辑权限码 ⇒ 改回 active（#779 的"重新获得权限后
         # 再登录，解除封禁"）。**这是与封禁可逆的那一半**，所以必须在 upsert 之前判出方向
@@ -675,6 +739,15 @@ class LoginService:
             deployment_edition=self.dify.deployment_edition,
             access_expire_minutes=self.dify.access_expire_minutes,
         )
+        if workspace_id and workspace_joined and self.inner_api is not None and not already:
+            # 首次加入目标业务工作区时主动切换活动工作区，并从开户过渡工作区移除残留成员关联（ADR-0373）。
+            switch_active_workspace(self.dify, session=session, workspace_id=workspace_id)
+            if newly_provisioned and nursery_workspace_id and nursery_workspace_id not in target_workspaces:
+                remove_nursery_member(
+                    self.dify,
+                    owner_session=self.owner_session(),
+                    member_id=account_id,
+                )
         import hashlib
         import time
 

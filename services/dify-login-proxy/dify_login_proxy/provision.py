@@ -41,6 +41,7 @@ _LOGGER = logging.getLogger("aiops.dify_login_proxy.provision")
 INVITE_PATH = "/console/api/workspaces/current/members/invite-email"
 ACTIVATE_PATH = "/console/api/activate"
 MEMBERS_PATH = "/console/api/workspaces/current/members"
+WORKSPACE_SWITCH_PATH = "/console/api/workspaces/switch"
 
 #: 公司用户在 Dify 里**只给 editor**（#772 B / 用户故事 9）：拿不到 API 工具密钥、
 #: 管不了成员、也不能借工具测试接口让服务端访问任意地址。
@@ -326,17 +327,30 @@ def find_account_id(settings: DifyConsoleSettings, session: ConsoleSession, emai
     raise DifyProvisionError("DIFY_ACCOUNT_MISSING", "邀请/激活后仍找不到该账号")
 
 
-def provision_editor(
+def _delete(settings: DifyConsoleSettings, session: ConsoleSession, path: str) -> Any:
+    return request_json(
+        RequestSpec(
+            url=settings.base_url.rstrip("/") + path,
+            method="DELETE",
+            headers=_console_headers(session),
+            timeout=settings.timeout,
+        ),
+        mapping=_mapping(),
+        envelope=_map_envelope,
+    )
+
+
+def provision_editor_with_nursery(
     settings: DifyConsoleSettings,
     *,
     owner_session: ConsoleSession,
     company_user_id: str,
     username: str,
-) -> str:
-    """确保该邮箱在 Dify 里是一个 editor 账号，返回它的账号 id。
+) -> tuple[str, str]:
+    """确保该邮箱在 Dify 里是一个 editor 账号，返回 ``(account_id, invited_workspace_id)``。
 
-    幂等：账号已存在（`already_member`）时跳过邀请，直接查回 id。这样"二次登录"与
-    "首次登录"走同一条代码路径，不会给同一个人开出第二个账号。
+    ``invited_workspace_id`` 是邀请阶段 ``owner_session`` 所在的过渡工作区；当调用方随即将
+    新账号加入目标业务环境的工作区后，可据此清理不属于本环境的过渡工作区关联（ADR-0373）。
     """
     email = account_email_for(company_user_id, environment=settings.environment)
     invited = _post(
@@ -345,6 +359,7 @@ def provision_editor(
         INVITE_PATH,
         {"emails": [email], "role": MEMBER_ROLE, "language": settings.language},
     )
+    invited_tenant_id = str(invited.get("tenant_id") or "") if isinstance(invited, dict) else ""
     token = _invite_token(invited, email)
     if token is not None:
         activated = _activate_without_session(
@@ -368,7 +383,61 @@ def provision_editor(
         # 下面这一次 `find_account_id` 会查回一个真正的成员，本就是幂等路径。
         if not _is_already_member(invited, email):
             raise DifyProvisionError("DIFY_INVITE_TOKEN_MISSING", f"邀请成功但取不到激活 token（{email}）")
-    return find_account_id(settings, owner_session, email)
+    return find_account_id(settings, owner_session, email), invited_tenant_id
+
+
+def provision_editor(
+    settings: DifyConsoleSettings,
+    *,
+    owner_session: ConsoleSession,
+    company_user_id: str,
+    username: str,
+) -> str:
+    """确保该邮箱在 Dify 里是一个 editor 账号，返回它的账号 id。
+
+    幂等：账号已存在（`already_member`）时跳过邀请，直接查回 id。这样"二次登录"与
+    "首次登录"走同一条代码路径，不会给同一个人开出第二个账号。
+    """
+    return provision_editor_with_nursery(
+        settings,
+        owner_session=owner_session,
+        company_user_id=company_user_id,
+        username=username,
+    )[0]
+
+
+def switch_active_workspace(
+    settings: DifyConsoleSettings,
+    *,
+    session: ConsoleSession,
+    workspace_id: str,
+) -> bool:
+    """把当前账号在 Dify 中的活动工作区切到 ``workspace_id``；失败仅记日志不阻断登录。"""
+    if not workspace_id:
+        return False
+    try:
+        result = _post(settings, session, WORKSPACE_SWITCH_PATH, {"tenant_id": workspace_id})
+        return isinstance(result, dict) and result.get("result") == "success"
+    except DifyProvisionError as exc:
+        _LOGGER.warning("dify-login: switch workspace=%s skipped (%s)", workspace_id, exc.code)
+        return False
+
+
+def remove_nursery_member(
+    settings: DifyConsoleSettings,
+    *,
+    owner_session: ConsoleSession,
+    member_id: str,
+) -> bool:
+    """新账号加入目标业务工作区后，将其从开户过渡工作区移除，避免跨环境工作区残留。"""
+    if not member_id:
+        return False
+    try:
+        _delete(settings, owner_session, f"{MEMBERS_PATH}/{member_id}")
+        return True
+    except DifyProvisionError as exc:
+        _LOGGER.warning("dify-login: remove nursery member=%s skipped (%s)", member_id, exc.code)
+        return False
 
 
 def _is_already_member(result: Any, email: str) -> bool:
@@ -411,4 +480,7 @@ __all__ = [
     "account_name_for",
     "find_account_id",
     "provision_editor",
+    "provision_editor_with_nursery",
+    "remove_nursery_member",
+    "switch_active_workspace",
 ]

@@ -60,7 +60,7 @@ class EnvironmentChange(BaseModel):
     tenant_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
 
 
-def _access(context, session):
+def _access(context, session, *, readonly: bool = False):
     # 目录管理员仍须正常公司登录；停用业务准入不能令目录管理员无法恢复。
     caller = auth.identity(context, session, require_admission=False, require_platform_permissions=False)
     path = _path(context)
@@ -75,16 +75,32 @@ def _access(context, session):
     try:
         allowed = environment_drafts.access(body, _identity(context, caller))
     except registry.RegistryError as exc:
-        raise auth.SetupRefused(str(exc)) from exc
+        caller_env = getattr(caller, "environment", "") or ""
+        control_env = str(getattr(context.settings, "environment", "") or "")
+        if (
+            readonly
+            and caller_env
+            and caller_env != control_env
+            and caller.platform
+            and caller.tenant_id == "-1"
+            and getattr(caller, "username", "") == "system"
+            and any(
+                isinstance(r, dict) and r.get("id") == caller_env and r.get("enabled")
+                for r in body["environments"]
+            )
+        ):
+            allowed = {caller_env}
+        else:
+            raise auth.SetupRefused(str(exc)) from exc
     return caller, body, allowed
 
 
 def drafts(context, session, payload=None):
-    caller, _, _ = _access(context, session)
+    caller, _, allowed = _access(context, session, readonly=payload is None)
     try:
         if payload is None:
             return environment_overview.catalogue_with_overview(
-                context, _path(context), _identity(context, caller)
+                context, _path(context), _identity(context, caller), allowed_override=allowed
             )
         if set(payload) != {"draft", "revision", "registry_revision"}:
             raise registry.RegistryError("ENVIRONMENT_DRAFT_INVALID")
@@ -104,9 +120,11 @@ def drafts(context, session, payload=None):
 
 
 def overview(context, session):
-    caller, _, _ = _access(context, session)
+    caller, _, allowed = _access(context, session, readonly=True)
     try:
-        return environment_overview.build_overview_locked(context, _path(context), _identity(context, caller))
+        return environment_overview.build_overview_locked(
+            context, _path(context), _identity(context, caller), allowed_override=allowed
+        )
     except registry.RegistryError as exc:
         raise auth.SetupRefused(str(exc)) from exc
     except (OSError, ValueError, RuntimeError, sqlite3.Error, TypeError, KeyError, AttributeError) as exc:
@@ -140,10 +158,11 @@ def plan(context, session, payload):
 
 
 def catalogue(context, session):
-    _, body, allowed = _access(context, session)
+    caller, body, allowed = _access(context, session, readonly=True)
     return {
         "revision": body["revision"],
         "environment": context.settings.environment,
+        "session_environment": getattr(caller, "environment", "") or context.settings.environment,
         "environments": [
             {
                 "id": r["id"],

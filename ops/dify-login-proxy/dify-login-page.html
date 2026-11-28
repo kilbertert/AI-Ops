@@ -161,12 +161,15 @@
     .then(function (response) { if (!response.ok) throw new Error(); return response.json(); })
     .then(function (data) {
       if (!data.environments || !data.environments.length) throw new Error();
+      var preferred = new URLSearchParams(window.location.search).get("environment") || "";
       data.environments.forEach(function (row) {
         var option = document.createElement("option"); option.value = row.id; option.textContent = row.name;
         environment.appendChild(option);
       });
-      document.getElementById("environment-row").hidden =
-        !data.selection_required || data.environments.length <= 1;
+      if (preferred && data.environments.some(function (row) { return row.id === preferred; })) {
+        environment.value = preferred;
+      }
+      document.getElementById("environment-row").hidden = !data.selection_required;
       refreshCaptcha();
     }).catch(function () { showError("登录环境尚未准备好，请联系管理员"); });
 
@@ -179,7 +182,8 @@
     button.disabled = true;
     button.textContent = "登录中…";
 
-    var redirect = new URLSearchParams(window.location.search).get("redirect_url") || "/";
+    var searchParams = new URLSearchParams(window.location.search);
+    var redirect = searchParams.get("redirect_url") || searchParams.get("redirect") || "/";
 
     fetch("/__aiops/login", {
       method: "POST",

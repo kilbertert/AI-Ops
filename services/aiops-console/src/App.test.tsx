@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 
@@ -122,6 +122,7 @@ describe('AI-Ops Standalone Console', () => {
   })
 
   afterEach(() => {
+    cleanup()
     vi.unstubAllGlobals()
   })
 
@@ -140,5 +141,90 @@ describe('AI-Ops Standalone Console', () => {
     await waitFor(() => {
       expect(screen.getAllByText(/1\.43\.23\+c4dfba594c69/).length).toBeGreaterThan(0)
     })
+  })
+
+  it('shows environment login switch on foreign env and workspace buttons on current env', async () => {
+    const tenantOverview = {
+      id: '2001',
+      name: '捷佳',
+      admission: 'enabled',
+      effective_enabled: true,
+      draft_enabled: true,
+      workspace: { id: 'c8c0a12f-7e0c-4564-8f40-cb1bc212bca0', state: 'ready', source: 'runtime' },
+      knowledge: { knowledge_base_id: 'kb-1', connection_id: 'conn-1', active_grants: 1, state: 'ready' },
+      apps: {
+        operator: { app_id: 'op-1', version_no: 2, state: 'active', source: 'runtime' },
+        consumer: { app_id: 'con-1', version_no: 1, state: 'active', source: 'runtime' },
+      },
+      capabilities: {
+        consumer: { state: 'passed', error_code: '', observed_at: 1795690000, task_id: 't1' },
+        order: { state: 'passed', error_code: '', observed_at: 1795690000, task_id: 't1' },
+        offline: { state: 'passed', error_code: '', observed_at: 1795690000, task_id: 't1' },
+      },
+      accuracy_confirmed: false,
+      latest_task: null,
+    }
+
+    // 场景 1：41 控制面会话查看 jiejia -> 只显示「切换至此环境登录」，不混排工作区
+    const foreignSessionCatalogue = {
+      ...mockCatalogue,
+      session_environment: '41',
+      overview: {
+        ...mockCatalogue.overview,
+        session_environment: '41',
+        environments: [
+          { ...mockCatalogue.overview.environments[0], tenants: [tenantOverview] },
+        ],
+      },
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        const body = init?.body ? JSON.parse(String(init.body)) : {}
+        if (body.action === 'environment-drafts') {
+          return new Response(JSON.stringify(foreignSessionCatalogue), { status: 200 })
+        }
+        return new Response(JSON.stringify({ tasks: [], sources: [], plans: [] }), { status: 200 })
+      }),
+    )
+    const { unmount } = render(<App />)
+    await waitFor(() => {
+      expect(screen.getByText('切换至此环境登录')).toBeTruthy()
+    })
+    expect(screen.queryByText('进入工作区')).toBeNull()
+    unmount()
+
+    // 场景 2：jiejia system 会话查看 jiejia -> 只读展示当前环境与租户，显示「进入工作区」与「进入知识库」
+    const customerScopedCatalogue = {
+      ...mockCatalogue,
+      can_create: false,
+      session_environment: 'jiejia',
+      drafts: [],
+      overview: {
+        ...mockCatalogue.overview,
+        session_environment: 'jiejia',
+        control_environment: '',
+        environments: [
+          { ...mockCatalogue.overview.environments[0], tenants: [tenantOverview] },
+        ],
+      },
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        const body = init?.body ? JSON.parse(String(init.body)) : {}
+        if (body.action === 'environment-drafts') {
+          return new Response(JSON.stringify(customerScopedCatalogue), { status: 200 })
+        }
+        return new Response(JSON.stringify({ tasks: [], sources: [], plans: [] }), { status: 200 })
+      }),
+    )
+    render(<App />)
+    await waitFor(() => {
+      expect(screen.getByText('进入工作区')).toBeTruthy()
+      expect(screen.getByText('进入知识库')).toBeTruthy()
+    })
+    expect(screen.queryByText('5 步自助开通向导')).toBeNull()
+    expect(screen.queryByText('切换至此环境登录')).toBeNull()
   })
 })

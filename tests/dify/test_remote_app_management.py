@@ -389,19 +389,41 @@ def test_cross_env_workspace_and_remote_publish_isolation(tmp_path: Path, monkey
     )
     svc = SelfService(context)
 
-    # 非 manager 严禁跨环境访问工作区或应用
-    normal_caller = self_service_identity.ManagerIdentity("user-2", "t-41", False, "tok")
-    with pytest.raises(self_service_identity.SetupRefused, match="ENVIRONMENT_MANAGEMENT_FORBIDDEN"):
-        svc.workspace(normal_caller, seeded["workspace_id"])
-    with pytest.raises(self_service_identity.SetupRefused, match="ENVIRONMENT_MANAGEMENT_FORBIDDEN"):
-        svc.authorize_app(normal_caller, seeded["op_app_id"])
+    # 跨环境严格隔离：41 账号（即使为全局 manager）严禁跨环境操作 jiejia 工作区或应用（ADR-0373）
+    normal_caller = self_service_identity.ManagerIdentity("user-2", "t-41", False, "tok", environment="41")
+    mgr_41 = self_service_identity.ManagerIdentity(
+        "mgr-1", "-1", True, "tok", environment="41", username="system"
+    )
+    for cross_caller in (normal_caller, mgr_41):
+        with pytest.raises(self_service_identity.SetupRefused, match="SETUP_ENVIRONMENT_MISMATCH"):
+            svc.workspace(cross_caller, seeded["workspace_id"])
+        with pytest.raises(self_service_identity.SetupRefused, match="SETUP_ENVIRONMENT_MISMATCH"):
+            svc.authorize_app(cross_caller, seeded["op_app_id"])
 
-    # 显式 manager 可跨环境切换工作区并读取实时状态
-    mgr_caller = self_service_identity.ManagerIdentity("mgr-1", "-1", True, "tok")
-    assert svc.workspace_scope(mgr_caller, seeded["workspace_id"]) == (seeded["tenant_id"], "jiejia")
-    assert svc.workspace(mgr_caller, seeded["workspace_id"]) == seeded["tenant_id"]
+    # 同环境 jiejia 其他租户严禁操作捷佳应用
+    other_jiejia_tenant = self_service_identity.ManagerIdentity(
+        "user-other", "other-tenant", False, "tok", environment="jiejia"
+    )
+    with pytest.raises(self_service_identity.SetupRefused, match="SETUP_PLATFORM_PERMISSION_REQUIRED"):
+        svc.authorize_app(other_jiejia_tenant, seeded["op_app_id"])
 
-    st = svc.status(mgr_caller, seeded["op_app_id"])
+    # 同环境 jiejia system（查看全部本环境租户）与 jiejia 租户账号均可进入本工作区并读写/发布
+    monkeypatch.setattr(
+        self_service_identity,
+        "tenants",
+        lambda _ctx, _caller: [{"id": seeded["tenant_id"], "name": "捷佳"}],
+    )
+    jiejia_system = self_service_identity.ManagerIdentity(
+        "1454348737375174658", "-1", True, "tok", environment="jiejia", username="system"
+    )
+    jiejia_tenant = self_service_identity.ManagerIdentity(
+        "1990990769149558786", seeded["tenant_id"], False, "tok", environment="jiejia", username="jiejia"
+    )
+    assert svc.workspace_scope(jiejia_system, seeded["workspace_id"]) == (seeded["tenant_id"], "jiejia")
+    assert svc.workspace(jiejia_system, seeded["workspace_id"]) == seeded["tenant_id"]
+    assert svc.workspace_scope(jiejia_tenant, seeded["workspace_id"]) == (seeded["tenant_id"], "jiejia")
+
+    st = svc.status(jiejia_system, seeded["op_app_id"])
     assert st["managed"] is True
     assert st["remote_managed"] is True
     assert st["environment"] == "jiejia"
@@ -411,7 +433,12 @@ def test_cross_env_workspace_and_remote_publish_isolation(tmp_path: Path, monkey
     assert st["route_revision"] == 1
     assert st["published_prompt"] == "旧管家提示词"
 
-    # 模拟 Dify 草稿更新后跨环境发布到 jiejia 客户机
+    # 租户账号同样可查看自身应用实时状态
+    st_tenant = svc.status(jiejia_tenant, seeded["op_app_id"])
+    assert st_tenant["version_no"] == 1
+    assert st_tenant["published_prompt"] == "旧管家提示词"
+
+    # 模拟 Dify 草稿更新后由 jiejia system 发布到 jiejia 客户机
     new_mc = {"pre_prompt": "捷佳定制管家 SOP v2", "agent_mode": {"tools": []}}
     svc.console = SimpleNamespace(
         _call=lambda ws, path, **_kw: {"model_config": new_mc} if path.endswith(seeded["op_app_id"]) else {}
@@ -437,26 +464,28 @@ def test_cross_env_workspace_and_remote_publish_isolation(tmp_path: Path, monkey
         ),
     )
 
-    pub = svc.publish(mgr_caller, seeded["op_app_id"], revision=1, expected_draft=draft_fingerprint(new_mc))
+    pub = svc.publish(
+        jiejia_system, seeded["op_app_id"], revision=1, expected_draft=draft_fingerprint(new_mc)
+    )
     assert pub["version_no"] == 2
     assert pub["revision"] == 2
     assert len(audit_calls) == 1
     assert audit_calls[0]["action"] == "published"
 
     # 发布后立即回读，确认客户机 gateway.db 已热更新至 V2
-    st2 = svc.status(mgr_caller, seeded["op_app_id"])
+    st2 = svc.status(jiejia_tenant, seeded["op_app_id"])
     assert st2["version_no"] == 2
     assert st2["route_revision"] == 2
     assert st2["published_prompt"] == "捷佳定制管家 SOP v2"
-    assert svc.versions(mgr_caller, seeded["op_app_id"]) == [2, 1]
+    assert svc.versions(jiejia_system, seeded["op_app_id"]) == [2, 1]
 
     # 乐观锁过期 revision 拒绝
     with pytest.raises(SetupConflict, match="SETUP_ROUTE_CHANGED"):
-        svc.publish(mgr_caller, seeded["op_app_id"], revision=1, expected_draft=draft_fingerprint(new_mc))
+        svc.publish(jiejia_system, seeded["op_app_id"], revision=1, expected_draft=draft_fingerprint(new_mc))
 
 
-def test_legacy_tenant_setup_retired_and_single_env_login_hides_selector() -> None:
-    """确认旧「复制并开通客户 AI 服务」已从补丁与桥彻底退役，且单环境登录页隐藏下拉框。"""
+def test_legacy_tenant_setup_retired_and_multi_env_login_selector_restored() -> None:
+    """确认旧「复制并开通客户 AI 服务」已彻底退役，且登录页恢复多环境选择与 ?environment= 预选。"""
     p04 = (ROOT / "deploy/dify-36/web-patches/1.17.1/04-self-service.patch").read_text(encoding="utf-8")
     p06 = (ROOT / "deploy/dify-36/web-patches/1.17.1/06-workflow-and-home-entry.patch").read_text(
         encoding="utf-8"
@@ -473,7 +502,204 @@ def test_legacy_tenant_setup_retired_and_single_env_login_hides_selector() -> No
     assert "TenantSetup" not in mgmt
     assert '"catalogue"' not in bridge
     assert '"/operations"' not in bridge
-    assert "data.environments.length <= 1" in login_html
+    assert "data.environments.length <= 1" not in login_html
+    assert 'get("environment")' in login_html
+    assert 'searchParams.get("redirect")' in login_html
+
+
+def test_customer_system_scoped_readonly_directory_and_write_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """客户环境 system 登录时只读可见本环境及本环境租户，严禁修改控制面目录或草稿（ADR-0373）。"""
+    from aiops_diagnostics.onboarding import management
+
+    ctrl_db = tmp_path / "ctrl" / "gateway.db"
+    ctrl_db.parent.mkdir(parents=True)
+    gateway_schema.ensure(ctrl_db)
+    reg_file = tmp_path / "ctrl" / "registry.json"
+    env_registry.apply(
+        reg_file,
+        [
+            {
+                "id": "41",
+                "name": "41生产环境",
+                "enabled": True,
+                "gateway_url": "https://api.mall.qushiyun.com",
+                "cpms_base_url": "https://api.mall.qushiyun.com/charging-pile",
+                "company_gateway_url": "https://api.mall.qushiyun.com",
+                "config_ref": "/etc/aiops-41/production.env",
+                "tenants": [{"id": "t-41", "name": "Ulink", "enabled": True}],
+            },
+            {
+                "id": "jiejia",
+                "name": "捷佳四轮国内充电",
+                "enabled": True,
+                "gateway_url": "https://api.juxichongdian.cn",
+                "cpms_base_url": "https://api.juxichongdian.cn/charging-pile",
+                "company_gateway_url": "https://api.juxichongdian.cn",
+                "config_ref": "/var/lib/aiops-41/onboarding-assets/jiejia.env",
+                "tenants": [{"id": "1990990768688599040", "name": "捷佳", "enabled": True}],
+            },
+        ],
+        expected_revision=0,
+        actor="test-init",
+        managers=[{"environment": "41", "tenant_id": "-1", "user_id": "mgr-41", "environments": ["*"]}],
+    )
+    settings = SimpleNamespace(
+        database_file=ctrl_db,
+        chat_route_bindings_file="",
+        environment="41",
+        execution_environment="41",
+        environment_registry_file="",
+        environment_management_registry_file=str(reg_file),
+        environment_onboarding_file="",
+    )
+    ctx = SimpleNamespace(settings=settings)
+
+    # jiejia system 只读查看目录与总览：仅返回 jiejia 且 can_create=False
+    jiejia_sys = self_service_identity.ManagerIdentity(
+        "1454348737375174658", "-1", True, "tok", environment="jiejia", username="system"
+    )
+    monkeypatch.setattr(management.auth, "identity", lambda *_a, **_kw: jiejia_sys)
+    cat = management.drafts(ctx, "sess")
+    assert cat["session_environment"] == "jiejia"
+    assert cat["can_create"] is False
+    assert [e["id"] for e in cat["effective"]] == ["jiejia"]
+    assert cat["overview"]["session_environment"] == "jiejia"
+    assert [e["id"] for e in cat["overview"]["environments"]] == ["jiejia"]
+
+    ov = management.overview(ctx, "sess")
+    assert ov["session_environment"] == "jiejia"
+    assert [e["id"] for e in ov["environments"]] == ["jiejia"]
+
+    # jiejia system 尝试写草稿或变更目录：严格拒绝
+    with pytest.raises(self_service_identity.SetupRefused, match="ENVIRONMENT_MANAGEMENT_FORBIDDEN"):
+        management.drafts(ctx, "sess", {"draft": {}, "revision": 0, "registry_revision": 1})
+    with pytest.raises(self_service_identity.SetupRefused, match="ENVIRONMENT_MANAGEMENT_FORBIDDEN"):
+        management.change(
+            ctx,
+            "sess",
+            management.EnvironmentChange(environment="jiejia", revision=1, name="x", enabled=True),
+        )
+
+    # 非 system 平台账号或普通租户在客户环境尝试读目录：严格拒绝
+    for forbidden_caller in (
+        self_service_identity.ManagerIdentity(
+            "999", "-1", True, "tok", environment="jiejia", username="test"
+        ),
+        self_service_identity.ManagerIdentity(
+            "888", "1990990768688599040", False, "tok", environment="jiejia", username="jiejia"
+        ),
+    ):
+        monkeypatch.setattr(management.auth, "identity", lambda *_a, _c=forbidden_caller, **_kw: _c)
+        with pytest.raises(self_service_identity.SetupRefused, match="ENVIRONMENT_MANAGEMENT_FORBIDDEN"):
+            management.drafts(ctx, "sess")
+
+
+def test_knowledge_hop_and_sync_resolve_customer_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """/v1/internal/knowledge/hop 与 /sync 必须按 workspace 解析客户环境，不硬编码控制面环境。"""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from aiops_diagnostics.gateway.routers import knowledge as kb_router
+    from aiops_diagnostics.knowledge import ragflow_console
+
+    ctrl_db = tmp_path / "ctrl.db"
+    gateway_schema.ensure(ctrl_db)
+    spaces = DifyWorkspaces(ctrl_db)
+    ws_id = "c8c0a12f-7e0c-4564-8f40-cb1bc212bca0"
+    tid = "1990990768688599040"
+    spaces.claim(tid, "jiejia", owner="test", lease_seconds=60)
+    spaces.mark_created(tid, "jiejia", ws_id)
+
+    recorded_envs: list[str] = []
+    synced_envs: list[str] = []
+
+    monkeypatch.setattr(
+        ragflow_console,
+        "open_console",
+        lambda **kw: (
+            recorded_envs.append(kw["environment"]),
+            ("https://kb.example/datasets", SimpleNamespace(ragflow_email="a@b.c", cookies={"sid": "v"})),
+        )[1],
+    )
+    monkeypatch.setattr(ragflow_console, "record", lambda *_a, **_kw: None)
+
+    class _FakeKbClient:
+        base_url = "http://127.0.0.1:9999"
+        service_token = "tok"
+        timeout = 5.0
+
+        def for_tenant(self, _t: str):
+            return self
+
+        def list_knowledge_bases(self):
+            return []
+
+    import aiops_diagnostics.knowledge.knowledge_retrieval as kr
+
+    class _CapturingKbClient:
+        def __init__(self, _base, *, tenant_id, environment, service_token="", timeout=15.0):
+            synced_envs.append(f"{environment}:{tenant_id}")
+
+        def list_knowledge_bases(self):
+            return []
+
+    monkeypatch.setattr(kr, "KbServiceClient", _CapturingKbClient)
+    monkeypatch.setattr(kb_router.knowledge_connection, "ensure", lambda *_a, **_kw: "ext-api-1")
+    monkeypatch.setattr(
+        kb_router.dify_knowledge_datasets,
+        "run",
+        lambda **_kw: {"applied": [], "retired": [], "orphans": []},
+    )
+
+    store = SimpleNamespace(
+        consume_hop_ticket=lambda _t, environment="": {
+            "tenant_id": tid,
+            "workspace_id": ws_id,
+            "environment": environment,
+        }
+    )
+    settings = SimpleNamespace(
+        environment="41",
+        environment_management_registry_file=str(tmp_path / "reg.json"),
+        ragflow_console_base_url="http://127.0.0.1:9380",
+        ragflow_console_public_url="https://kb.example",
+        ragflow_console_cookie_domain="",
+        ragflow_credential_key="k" * 32,
+        ragflow_console_public_pem=str(tmp_path / "pub.pem"),
+        dify_console_base_url="http://127.0.0.1:5001",
+        dify_console_api_key="console-key",
+        dify_external_knowledge_api_id="ext-1",
+        dify_knowledge_api_key="",
+    )
+    ctx = SimpleNamespace(
+        settings=settings,
+        store=store,
+        dify_workspaces=spaces,
+        runtime=SimpleNamespace(
+            dify_workspaces=spaces,
+            kb_search_client=_FakeKbClient(),
+            knowledge_dataset_sync_guard=None,
+        ),
+    )
+    deps = SimpleNamespace(
+        authenticated_agent_caller=lambda: None,
+        dify_workspace_credential=lambda: None,
+    )
+    app = FastAPI()
+    kb_router.register(app, ctx, deps, None)
+    client = TestClient(app)
+
+    hop_resp = client.get("/v1/internal/knowledge/hop?ticket=abc", follow_redirects=False)
+    assert hop_resp.status_code == 303
+    assert recorded_envs == ["jiejia"]
+
+    sync_resp = client.post(f"/v1/internal/knowledge/sync?workspace={ws_id}")
+    assert sync_resp.status_code == 200
+    assert synced_envs == [f"jiejia:{tid}"]
 
 
 def test_node_all_targets_ignores_remote_environment_operator_apps(

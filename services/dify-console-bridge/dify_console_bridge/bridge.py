@@ -446,10 +446,6 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
             raise _Rejected(401, "环境登录已失效，请重新登录")
         if identity.get("business_admitted") is False and path != "/__aiops/manage":
             raise _Rejected(403, "当前环境未开通或已停用，仅允许环境目录管理")
-        identifier = identity.get("environment")
-        row = self.environment_credentials.get(identifier) if isinstance(identifier, str) else None
-        if row is None:
-            raise _Rejected(403, "当前环境管理连接尚未准备好")
         try:
             value = identity.get("gateway_url")
             if not isinstance(value, str):
@@ -457,6 +453,17 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
             gateway = require_secure_endpoint(value, what="环境Gateway")
         except (TypeError, ValueError):
             raise _Rejected(502, "环境连接不可用") from None
+        identifier = identity.get("environment")
+        row = self.environment_credentials.get(identifier) if isinstance(identifier, str) else None
+        if row is None and self.settings.control_plane_managed_envs:
+            # 受管客户环境统一经控制面网关代管：严守目标地址必须与本地配置控制面一致，绝不外泄控制面密钥。
+            expected_gateway = require_secure_endpoint(self.settings.gateway_base_url, what="控制面Gateway")
+            if gateway == expected_gateway:
+                row = self.environment_credentials.get("41") or next(
+                    iter(self.environment_credentials.values()), None
+                )
+        if row is None:
+            raise _Rejected(403, "当前环境管理连接尚未准备好")
         self.settings = replace(
             self.settings,
             gateway_base_url=gateway,

@@ -56,19 +56,19 @@ class GatewayWorkspaceClient:
     secret: str = field(repr=False, default="")
     expire_seconds: int = 300
     timeout: float = 10.0
+    environment: str = ""
 
     @property
     def configured(self) -> bool:
         return bool(self.base_url and self.secret)
 
-    def resolve(self, tenant_id: str) -> str:
+    def resolve_all(self, tenant_id: str) -> tuple[str, tuple[str, ...]]:
         import time
 
         from aiops_diagnostics.common.bounded_http import ErrorMapping, HttpFailure
         from aiops_diagnostics.common.http_auth import build_internal_token_headers
 
         def classified(failure: HttpFailure) -> Exception:
-            payload: dict[str, Any] = {}
             if failure.code in {
                 DIFY_WORKSPACE_UNRESOLVED,
                 DIFY_WORKSPACE_CREATING,
@@ -78,7 +78,6 @@ class GatewayWorkspaceClient:
                 code = failure.code
             else:
                 code = "DIFY_WORKSPACE_LOOKUP_FAILED"
-            payload["code"] = code
             return WorkspaceUnavailable(
                 code,
                 failure.detail or "网关没有给出 workspace：该租户可能还没有工作区",
@@ -93,10 +92,13 @@ class GatewayWorkspaceClient:
             invalid_body=classified,
             invalid_envelope=classified,
         )
+        headers = build_internal_token_headers(self.secret, self.expire_seconds, int(time.time()))
+        if self.environment:
+            headers["X-AIOps-Workspace-Environment"] = self.environment
         payload = request_json(
             RequestSpec(
                 url=join_url(self.base_url, "/v1/dify/workspace", query={"tenant_id": tenant_id}),
-                headers=build_internal_token_headers(self.secret, self.expire_seconds, int(time.time())),
+                headers=headers,
                 timeout=self.timeout,
             ),
             mapping=mapping,
@@ -109,7 +111,53 @@ class GatewayWorkspaceClient:
                 "网关回了 200 但没有 workspace_id",
                 http_status=502,
             )
-        return workspace_id
+        raw_ids = payload.get("workspace_ids") if isinstance(payload, dict) else None
+        extra = (
+            [str(item) for item in raw_ids if isinstance(item, str) and item.strip()]
+            if isinstance(raw_ids, list)
+            else []
+        )
+        ordered = [workspace_id, *[item for item in extra if item != workspace_id]]
+        return workspace_id, tuple(ordered)
+
+    def resolve(self, tenant_id: str) -> str:
+        return self.resolve_all(tenant_id)[0]
+
+    def fetch_registry(self) -> dict[str, Any] | None:
+        """经控制面既有内部端点同步生效环境目录（无密钥），失败返回 ``None`` 由调用方降级。"""
+        import time
+
+        from aiops_diagnostics.common.bounded_http import ErrorMapping, HttpFailure
+        from aiops_diagnostics.common.http_auth import build_internal_token_headers
+
+        if not self.configured:
+            return None
+
+        def ignored(failure: HttpFailure) -> Exception:
+            return RuntimeError(failure.detail or failure.kind)
+
+        headers = build_internal_token_headers(self.secret, self.expire_seconds, int(time.time()))
+        headers["X-AIOps-Workspace-Environment"] = "*"
+        try:
+            payload = request_json(
+                RequestSpec(
+                    url=join_url(self.base_url, "/v1/dify/workspace", query={"tenant_id": "__catalogue__"}),
+                    headers=headers,
+                    timeout=min(self.timeout, 3.0),
+                    max_read_bytes=2 * 1024 * 1024,
+                ),
+                mapping=ErrorMapping(
+                    auth_rejected=ignored,
+                    http_error=ignored,
+                    unavailable=ignored,
+                    invalid_body=ignored,
+                    invalid_envelope=ignored,
+                ),
+            )
+        except Exception:  # noqa: BLE001 - 瞬时抖动回退本地缓存目录
+            return None
+        doc = payload.get("registry") if isinstance(payload, dict) else None
+        return doc if isinstance(doc, dict) else None
 
 
 def join_account(

@@ -246,6 +246,7 @@ class BridgeSettings:
     timeout: float = 15.0
     environment_credentials_file: str = ""
     console_dist_dir: str = DEFAULT_CONSOLE_DIST_DIR
+    control_plane_managed_envs: bool = False
 
     def __post_init__(self) -> None:
         if normalize_origin(self.console_origin) != self.console_origin:
@@ -299,5 +300,9 @@ class BridgeSettings:
             console_dist_dir=(
                 os.environ.get("AIOPS_CONSOLE_BRIDGE_CONSOLE_DIST_DIR", DEFAULT_CONSOLE_DIST_DIR).strip()
                 or DEFAULT_CONSOLE_DIST_DIR
+            ),
+            control_plane_managed_envs=(
+                os.environ.get("AIOPS_CONSOLE_BRIDGE_CONTROL_PLANE_MANAGED_ENVS", "").strip().lower()
+                in {"1", "true", "yes", "on"}
             ),
         )

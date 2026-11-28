@@ -142,6 +142,9 @@ class LoginProxySettings:
     operator_token_seconds: int | None = None
     environment_registry_file: str = ""
     environment_credentials_file: str = ""
+    workspace_environment: str = ""
+    allow_system_platform_account: bool = False
+    auto_registry_environments: bool = False
 
     def __post_init__(self) -> None:
         assert_public_origin_is_https(self.public_origin)
@@ -216,6 +219,10 @@ class LoginProxySettings:
             operator_token_seconds=_optional_int(os.environ.get("AIOPS_LOGIN_PROXY_OPERATOR_TOKEN_SECONDS")),
             environment_registry_file=os.environ.get("AIOPS_LOGIN_PROXY_ENVIRONMENT_REGISTRY_FILE", ""),
             environment_credentials_file=os.environ.get("AIOPS_LOGIN_PROXY_ENVIRONMENT_CREDENTIALS_FILE", ""),
+            auto_registry_environments=(
+                os.environ.get("AIOPS_LOGIN_PROXY_AUTO_REGISTRY_ENVIRONMENTS", "").strip().lower()
+                in {"1", "true", "yes", "on"}
+            ),
         )
 
 
@@ -483,10 +490,16 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
             self.service.require_registered_tenant(row_tenant, user_type=row_type, allow_manager=False)
         except PermissionDenied:
             business_admitted = False
+        system_override = self.service.is_system_platform_override(
+            username=str(row.get("company_username") or ""),
+            user_type=row_type,
+            tenant_id=row_tenant,
+        )
         allowed = business_admitted and self.service.policy.may_publish(
             permissions,
             tenant_account=tenant_account,
             has_own_workspace=tenant_account and bool(row.get("workspace_joined")),
+            system_platform_override=system_override,
         )
         self._json(
             200,
@@ -522,7 +535,7 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
 
         presented = self.headers.get("Authorization", "").removeprefix("Bearer ")
         keys = (
-            [s.operator_trial_key for s, _, _ in self.environments.entries.values()]
+            [s.operator_trial_key for s, _, _ in list(self.environments.entries.values())]
             if self.settings.environment_credentials_file
             else [self.settings.operator_trial_key]
         )
@@ -537,6 +550,8 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
             if not hmac.compare_digest(self.settings.operator_trial_key.encode(), presented.encode()):
                 raise ValueError("wrong environment exchange key")
             result = self.service.operator_token(session) if isinstance(session, str) else None
+            if result is not None and self.settings.environment_credentials_file:
+                result = {**result, "environment": self.settings.dify.environment}
         except (ValueError, TypeError, PermissionDenied):
             result = None
         self._json(200 if result else 403, result or {"error": "login_required"})
@@ -555,7 +570,7 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
                 self._json(403, {"result": "error", "message": "请重新登录后退出"})
                 return
         if session is not None:
-            for _, service, _ in self.environments.entries.values():
+            for _, service, _ in list(self.environments.entries.values()):
                 service.forget_operator_token(session.access_token)
         else:
             cookies = SimpleCookie()
@@ -563,7 +578,7 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
                 cookies.load(self.headers.get("Cookie", ""))
                 for name in ("access_token", "__Host-access_token"):
                     if name in cookies:
-                        for _, service, _ in self.environments.entries.values():
+                        for _, service, _ in list(self.environments.entries.values()):
                             service.forget_operator_token(cookies[name].value)
             except Exception:  # noqa: BLE001 - 畸形 cookie 不阻止旧入口退出。
                 pass
@@ -719,6 +734,7 @@ def build_service(settings: LoginProxySettings) -> LoginService:
         directory = GatewayWorkspaceClient(
             base_url=settings.gateway_url,
             secret=settings.gateway_internal_token,
+            environment=settings.workspace_environment,
         )
         inner = DifyInnerApi(
             InnerApiSettings(base_url=settings.inner_api_base_url, api_key=settings.inner_api_key)
@@ -737,6 +753,7 @@ def build_service(settings: LoginProxySettings) -> LoginService:
         retain_operator_token=bool(settings.operator_trial_key),
         operator_token_seconds=settings.operator_token_seconds,
         environment_registry=registry,
+        allow_system_platform_account=settings.allow_system_platform_account,
     )
 
 
