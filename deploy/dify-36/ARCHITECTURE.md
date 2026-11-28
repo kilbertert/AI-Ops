@@ -12,7 +12,8 @@
   ├─ /signin                         ──► 静态自包含登录页 /srv/aiops-console-assets/dify-login-page.html
   ├─ /__aiops/login*                 ──► 127.0.0.1:10119 容器 aiops-dify-login-proxy   [uid=aiopslogin]
   ├─ /__aiops/publish|trial|manage*  ──► 127.0.0.1:10118 容器 aiops-dify-console-bridge [uid=aiopsbridge]
-  └─ /console/* /api/* /aiops/* /... ──► 127.0.0.1:10018 Dify 上游容器组
+  ├─ /aiops/* (环境与租户工作台)     ──► 127.0.0.1:10118 容器 aiops-dify-console-bridge [console-dist SPA]
+  └─ /console/* /api/* /apps /...    ──► 127.0.0.1:10018 Dify 上游容器组
                                            ├─ deploy-web-1  (ACR 镜像 aiops-dify-web@sha256)
                                            ├─ deploy-api-1  (5001 ◄── 127.0.0.1:15001 aiops-inner-api-forward.service)
                                            └─ worker / db_postgres / redis / plugin_daemon / ssrf_proxy / weaviate
@@ -22,8 +23,8 @@
 
 | 组件 | 交付物（阿里云 ACR / 宿主机） | 运行形态与 OS 身份 | 核心职责 | 只读/读写目录与密钥 |
 |---|---|---|---|---|
-| **Dify Web 前端** | `qushi-registry.../release/aiops-dify-web@sha256:...` | Docker (`deploy-web-1`) | Dify 控制台 UI、受管发布条、RAGFlow 入口卡及 `/aiops/*` 管理页（ADR-0365 / ADR-0366） | 无宿主机私有盘密钥 |
-| **控制台发布/管理桥** | `qushi-registry.../release/aiops-dify-edge@sha256:...` | Docker (`aiops-dify-console-bridge`, `aiopsbridge`, `--network host --read-only`) | 同源 `/__aiops/*` 发布、撤回、版本、试运行、管家预览及工作台环境管理转发 | Env: `/etc/aiops-console-bridge/bridge.env`；只读挂载 `/var/lib/aiops-console-bridge` |
+| **Dify Web 前端** | `qushi-registry.../release/aiops-dify-web@sha256:...` | Docker (`deploy-web-1`) | Dify 控制台 UI、编排页受管发布条与 RAGFlow 入口卡（ADR-0365 / ADR-0366 / ADR-0368） | 无宿主机私有盘密钥 |
+| **控制台发布/管理桥（含独立工作台）** | `qushi-registry.../release/aiops-dify-edge@sha256:...` | Docker (`aiops-dify-console-bridge`, `aiopsbridge`, `--network host --read-only`) | 同源 `/__aiops/*` 发布、撤回、版本、试运行、管家预览及 `/aiops/*` 独立管理工作台静态托管（`services/aiops-console/`） | Env: `/etc/aiops-console-bridge/bridge.env`；只读挂载 `/var/lib/aiops-console-bridge` |
 | **公司账号登录代理** | **同上 `aiops-dify-edge@sha256:...`** | Docker (`aiops-dify-login-proxy`, `aiopslogin`, `--network host --read-only`) | 公司账号密码验证码换取 Dify 会话、`mappings.db`、`/__aiops/publish-check` | Env: `/etc/aiops-login-proxy/login-proxy.env`（独享 `DIFY_SECRET_KEY` / `COMPANY_AES_KEY`）；读写挂载 `/var/lib/aiops-login-proxy` |
 | **Inner API 转发器** | `/usr/local/bin/aiops-inner-api-forward` | systemd (`aiops-inner-api-forward.service`) | 通过宿主机 `docker inspect` 动态追踪 `deploy-api-1:5001` 并监听 `127.0.0.1:15001` | 需读取 `/var/run/docker.sock`，保留宿主机 systemd |
 

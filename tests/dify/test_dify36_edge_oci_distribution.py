@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import threading
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import yaml
@@ -34,6 +37,100 @@ def test_edge_dockerfile_pins_dependencies_and_non_root_permissions() -> None:
     assert "dify_console_bridge" in df
     assert "dify_login_proxy" in df
     assert "PYTHONPATH=/opt/aiops-edge" in df
+    assert "FROM node:22-slim AS console-builder" in df
+    assert "COPY --from=console-builder /build/dist /opt/aiops-edge/console-dist" in df
+
+
+def test_decoupled_admin_console_bridge_and_web_patch_slimdown(tmp_path: Path) -> None:
+    from dify_console_bridge.bridge import make_server
+    from dify_console_bridge.config import BridgeSettings
+
+    dist_dir = tmp_path / "console-dist"
+    assets_dir = dist_dir / "assets"
+    assets_dir.mkdir(parents=True)
+    (dist_dir / "index.html").write_text(
+        '<!doctype html><html><body><div id="root"></div>'
+        '<script src="/aiops/assets/app.js"></script></body></html>',
+        encoding="utf-8",
+    )
+    (assets_dir / "app.js").write_text("console.log('ok');", encoding="utf-8")
+    (tmp_path / "secret.txt").write_text("TOP_SECRET", encoding="utf-8")
+
+    settings = BridgeSettings(
+        listen_host="127.0.0.1",
+        listen_port=0,
+        dify_base_url="http://127.0.0.1:10018",
+        gateway_base_url="https://api.example.test",
+        publish_key="x" * 32,
+        console_origin="https://dify.ranlei.work",
+        workspace_id="2db44904-f981-42ca-b7e2-6f35cb2afffd",
+        console_dist_dir=str(dist_dir),
+    )
+    server = make_server(settings)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None
+
+    opener = urllib.request.build_opener(_NoRedirect)
+    try:
+        # 1. 无 Cookie 访问 /aiops/environments 返回 307 -> /signin?redirect=%2Faiops%2Fenvironments
+        try:
+            opener.open(f"{base}/aiops/environments")
+            raise AssertionError("expected 307 redirect")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 307
+            assert exc.headers["Location"] == "/signin?redirect=%2Faiops%2Fenvironments"
+
+        # 2. 带 Dify 会话 Cookie 返回 200 HTML 与安全头
+        req = urllib.request.Request(
+            f"{base}/aiops/environments",
+            headers={"Cookie": "__Host-access_token=tok-123"},
+        )
+        with urllib.request.urlopen(req) as resp:
+            assert resp.status == 200
+            assert "text/html" in resp.headers["Content-Type"]
+            assert resp.headers["X-Frame-Options"] == "DENY"
+            assert '<div id="root"></div>' in resp.read().decode("utf-8")
+
+        # 3. 静态 JS 产物返回 200 application/javascript
+        with urllib.request.urlopen(f"{base}/aiops/assets/app.js") as resp:
+            assert resp.status == 200
+            assert "application/javascript" in resp.headers["Content-Type"]
+            assert "console.log('ok')" in resp.read().decode("utf-8")
+
+        # 4. 路径穿越必须拒绝（404）
+        for bad_url in (
+            f"{base}/aiops/assets/../secret.txt",
+            f"{base}/aiops/assets/%2e%2e/secret.txt",
+            f"{base}/aiops/assets/../../etc/passwd",
+        ):
+            try:
+                urllib.request.urlopen(bad_url)
+                raise AssertionError(f"expected 404 for {bad_url}")
+            except urllib.error.HTTPError as exc:
+                assert exc.code == 404
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    publish_conf = (ROOT / "ops/dify-console-bridge/dify-console-publish.conf").read_text(encoding="utf-8")
+    assert "location ^~ /aiops {" in publish_conf
+
+    adr_368 = ROOT / "docs/adr/0368-decouple-aiops-admin-console-from-dify-web.md"
+    assert adr_368.is_file()
+
+    web_1171 = ROOT / "deploy/dify-36/web-patches/1.17.1"
+    for removed in (
+        "aiops-environments.tsx",
+        "aiops-environment-releases.tsx",
+        "aiops-onboarding-wizard.tsx",
+        "aiops-environments.browser.spec.tsx",
+    ):
+        assert not (web_1171 / removed).exists(), f"已迁出的管理台文件仍残留于 web-patches: {removed}"
 
 
 def test_deploy_edge_image_validation_and_dry_run() -> None:

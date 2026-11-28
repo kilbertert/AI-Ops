@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import json
 import logging
+import mimetypes
 import urllib.parse
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any, ClassVar
 
 from aiops_diagnostics.common.bounded_http import (
@@ -46,6 +48,8 @@ from .client import (
     _workspace_for,
 )
 from .config import (
+    _CONSOLE_ASSET_PREFIX,
+    _CONSOLE_ROUTES,
     _CONTENT_LENGTH_RE,
     _KNOWLEDGE_OPEN_ROUTE,
     _KNOWLEDGE_SYNC_ROUTE,
@@ -216,8 +220,15 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
     environment_credentials: ClassVar[dict[str, dict[str, str]]] = {}
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler 的协议
-        path = urllib.parse.urlsplit(self.path).path
+        parsed = urllib.parse.urlsplit(self.path)
+        path = parsed.path
         try:
+            if path in _CONSOLE_ROUTES:
+                self._get_console_page(parsed)
+                return
+            if path.startswith(_CONSOLE_ASSET_PREFIX):
+                self._get_console_asset(path.removeprefix(_CONSOLE_ASSET_PREFIX))
+                return
             if path != _KNOWLEDGE_OPEN_ROUTE:
                 raise _Rejected(404, "not found")
             self._select_environment()
@@ -229,6 +240,80 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
         except ConsolePublishError as exc:
             self.log_message("knowledge open bridge failed: %s", exc)
             self._html(502, "知识库入口暂时不可用，请稍后再试")
+
+    def _get_console_page(self, parsed: urllib.parse.SplitResult) -> None:
+        """提供独立管理台 HTML；无 Dify 会话 cookie 时 307 跳转 `/signin`。"""
+        session = _console_access_token_from_cookie(self._single_header("Cookie"))
+        if session is None:
+            raw_target = "/aiops/environments" if parsed.path in {"/aiops", "/aiops/"} else parsed.path
+            target = raw_target + (f"?{parsed.query}" if parsed.query else "")
+            location = f"/signin?redirect={urllib.parse.quote(target, safe='')}"
+            self.send_response(307)
+            self.send_header("Location", location)
+            self.send_header("Content-Length", "0")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.close_connection = True
+            self.end_headers()
+            return
+
+        index_file = Path(self.settings.console_dist_dir) / "index.html"
+        if not index_file.is_file():
+            self._html(503, "管理工作台前端产物尚未就绪，请检查 aiops-dify-edge 构建")
+            return
+        body = index_file.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "same-origin")
+        self.send_header("Connection", "close")
+        self.close_connection = True
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _get_console_asset(self, raw_rel_path: str) -> None:
+        """只读提供独立管理台 `/aiops/assets/*` 静态构建产物（严格防路径穿越）。"""
+        decoded = urllib.parse.unquote(raw_rel_path)
+        if not decoded or "\x00" in decoded or decoded.startswith("/") or "\\" in decoded:
+            raise _Rejected(404, "not found")
+        parts = decoded.split("/")
+        if any(part in {"", ".", ".."} for part in parts):
+            raise _Rejected(404, "not found")
+
+        assets_root = (Path(self.settings.console_dist_dir) / "assets").resolve(strict=False)
+        candidate = (assets_root / Path(*parts)).resolve(strict=False)
+        if candidate == assets_root or not candidate.is_relative_to(assets_root) or not candidate.is_file():
+            raise _Rejected(404, "not found")
+
+        content_type_map = {
+            ".js": "application/javascript; charset=utf-8",
+            ".mjs": "application/javascript; charset=utf-8",
+            ".css": "text/css; charset=utf-8",
+            ".svg": "image/svg+xml",
+            ".html": "text/html; charset=utf-8",
+            ".json": "application/json; charset=utf-8",
+            ".png": "image/png",
+            ".ico": "image/x-icon",
+            ".woff2": "font/woff2",
+        }
+        ctype = (
+            content_type_map.get(candidate.suffix.lower())
+            or mimetypes.guess_type(candidate.name)[0]
+            or "application/octet-stream"
+        )
+        body = candidate.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Connection", "close")
+        self.close_connection = True
+        self.end_headers()
+        self.wfile.write(body)
 
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler 的协议
         path = urllib.parse.urlsplit(self.path).path

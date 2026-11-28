@@ -29,6 +29,10 @@ from pathlib import Path
 assets = Path("/opt/aiops-edge/assets")
 for name in ("dify-login-page.html", "dify-console-10008.conf", "dify-console-publish.conf", "dify-login-proxy.conf"):
     assert (assets / name).is_file(), f"missing asset: {name}"
+dist = Path("/opt/aiops-edge/console-dist")
+assert (dist / "index.html").is_file(), "missing console-dist/index.html"
+dist_assets = list((dist / "assets").iterdir())
+assert dist_assets, "missing console-dist/assets files"
 print("smoke bridge ok")
 '
 

@@ -129,7 +129,15 @@ LAYOUT = {
     ),
     "services": (
         frozenset(),
-        frozenset(["dify-console-bridge", "dify-login-proxy", "execution-node", "model-proxy"]),
+        frozenset(
+            [
+                "aiops-console",
+                "dify-console-bridge",
+                "dify-login-proxy",
+                "execution-node",
+                "model-proxy",
+            ]
+        ),
     ),
     "integrations": (
         frozenset(),

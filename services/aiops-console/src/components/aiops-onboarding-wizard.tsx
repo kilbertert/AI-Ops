@@ -1,12 +1,10 @@
-'use client'
-
-import { Button } from '@langgenius/dify-ui/button'
-import { Checkbox } from '@langgenius/dify-ui/checkbox'
-import { Input } from '@langgenius/dify-ui/input'
-import { StatusDot } from '@langgenius/dify-ui/status-dot'
+import { Button } from './ui/button'
+import { Checkbox } from './ui/checkbox'
+import { Input } from './ui/input'
+import { StatusDot } from './ui/status-dot'
 import { useEffect, useState } from 'react'
-import { manage } from '@/service/aiops-management'
-import { LiquidGlassSurface } from './aiops-liquid-glass'
+import { manage } from '../lib/manage'
+import { LiquidGlassSurface } from './liquid-glass'
 
 type WizardStep = 1 | 2 | 3 | 4 | 5
 type HostEnrollMode = 'ephemeral_password' | 'bootstrap_script'

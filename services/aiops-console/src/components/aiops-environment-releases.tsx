@@ -1,10 +1,8 @@
-'use client'
-
-import { Button } from '@langgenius/dify-ui/button'
-import { Popover, PopoverContent, PopoverTrigger } from '@langgenius/dify-ui/popover'
+import { Button } from './ui/button'
+import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 import { useEffect, useState } from 'react'
-import { manage } from '@/service/aiops-management'
-import { LiquidGlassSurface } from './aiops-liquid-glass'
+import { manage } from '../lib/manage'
+import { LiquidGlassSurface } from './liquid-glass'
 
 type IngressDiff = {
   changed: boolean

@@ -1,6 +1,4 @@
-'use client'
-
-import type { StatusDotStatus } from '@langgenius/dify-ui/status-dot'
+import type { StatusDotStatus } from './ui/status-dot'
 import {
   AlertDialog,
   AlertDialogActions,
@@ -9,10 +7,10 @@ import {
   AlertDialogContent,
   AlertDialogDescription,
   AlertDialogTitle,
-} from '@langgenius/dify-ui/alert-dialog'
-import { Button } from '@langgenius/dify-ui/button'
-import { Checkbox } from '@langgenius/dify-ui/checkbox'
-import { Input } from '@langgenius/dify-ui/input'
+} from './ui/alert-dialog'
+import { Button } from './ui/button'
+import { Checkbox } from './ui/checkbox'
+import { Input } from './ui/input'
 import {
   Select,
   SelectContent,
@@ -21,13 +19,12 @@ import {
   SelectItemText,
   SelectTrigger,
   SelectValue,
-} from '@langgenius/dify-ui/select'
-import { StatusDot } from '@langgenius/dify-ui/status-dot'
+} from './ui/select'
+import { StatusDot } from './ui/status-dot'
 import { useEffect, useRef, useState } from 'react'
-import { useRouter } from '@/next/navigation'
-import { manage } from '@/service/aiops-management'
+import { manage } from '../lib/manage'
 import EnvironmentReleasesPanel from './aiops-environment-releases'
-import { LiquidGlassSurface } from './aiops-liquid-glass'
+import { LiquidGlassSurface } from './liquid-glass'
 import OnboardingWizard from './aiops-onboarding-wizard'
 
 type Tenant = { id: string; name: string; enabled: boolean }
@@ -730,7 +727,6 @@ function CompactProgressSteps({
 }
 
 export default function EnvironmentManagement() {
-  const router = useRouter()
   const [data, setData] = useState<Catalogue | null>(null)
   const [overview, setOverview] = useState<EnvironmentOverview | null>(null)
   const [overviewBusy, setOverviewBusy] = useState(false)
@@ -882,7 +878,7 @@ export default function EnvironmentManagement() {
         return
       event.preventDefault()
       event.stopPropagation()
-      setPending(() => () => router.push(`${next.pathname}${next.search}${next.hash}`))
+      setPending(() => () => window.location.assign(`${next.pathname}${next.search}${next.hash}`))
     }
     window.addEventListener('beforeunload', beforeUnload)
     document.addEventListener('click', onLinkClick, true)
@@ -890,7 +886,7 @@ export default function EnvironmentManagement() {
       window.removeEventListener('beforeunload', beforeUnload)
       document.removeEventListener('click', onLinkClick, true)
     }
-  }, [dirty, router])
+  }, [dirty])
 
   async function save() {
     if (!data || !draft || busy) return

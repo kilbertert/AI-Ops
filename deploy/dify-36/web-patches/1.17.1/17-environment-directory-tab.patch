@@ -1,24 +1,6 @@
---- a/web/app/components/main-nav/routes.ts
-+++ b/web/app/components/main-nav/routes.ts
-@@ -75,6 +75,15 @@
-     active: (path: string) => isPathUnderRoute(path, '/datasets'),
-     icon: 'i-custom-vender-main-nav-knowledge-v2',
-     activeIcon: 'i-custom-vender-main-nav-knowledge-v2-active',
-+    visibility: VISIBLE_TO_ALL,
-+  },
-+  {
-+    key: 'environment-directory',
-+    href: '/aiops/environments',
-+    label: '环境与租户',
-+    active: (path: string) => isPathUnderRoute(path, '/aiops/environments'),
-+    icon: 'i-custom-vender-main-nav-integrations-v2',
-+    activeIcon: 'i-custom-vender-main-nav-integrations-v2-active',
-     visibility: VISIBLE_TO_ALL,
-   },
-   {
 --- a/web/app/components/main-nav/__tests__/index.spec.tsx
 +++ b/web/app/components/main-nav/__tests__/index.spec.tsx
-@@ -694,6 +694,8 @@
+@@ -694,6 +694,8 @@ describe('MainNav', () => {
      expect(agentsLink).toHaveAttribute('href', '/agents')
      expect(screen.getByRole('link', { name: /Agents common.menus.status/ })).toBeInTheDocument()
      expect(agentsLink.querySelector('.i-custom-vender-main-nav-agent')).toBeInTheDocument()
@@ -27,7 +9,7 @@
      const skillsLink = screen.getByRole('link', { name: /common.mainNav.skills/ })
      expect(skillsLink).toHaveAttribute('href', '/skills')
      expect(skillsLink.querySelector('.i-custom-vender-main-nav-skill')).toBeInTheDocument()
-@@ -721,6 +723,7 @@
+@@ -721,6 +723,7 @@ describe('MainNav', () => {
        '/apps',
        '/agents',
        '/datasets',
@@ -35,11 +17,70 @@
        '/skills',
        '/integrations/model-provider',
        '/marketplace',
---- /dev/null
-+++ b/web/app/(commonLayout)/aiops/environments/page.tsx
-@@ -0,0 +1,5 @@
-+import EnvironmentManagement from '@/app/components/aiops-environments'
+--- a/web/app/components/main-nav/components/nav-link.tsx
++++ b/web/app/components/main-nav/components/nav-link.tsx
+@@ -18,23 +18,35 @@ type MainNavLinkProps = {
+ const MainNavLink = ({ item, pathname, children }: MainNavLinkProps) => {
+   const activated = item.active(pathname)
+ 
+-  return (
+-    <Link
+-      href={item.href}
+-      aria-current={activated ? 'page' : undefined}
+-      title={item.label}
+-      className={cn(
+-        'group relative flex h-8 w-full items-center gap-2 rounded-[10px] px-2 py-1.5 outline-hidden transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-state-accent-solid focus-visible:outline-solid',
+-        'not-aria-[current=page]:bg-components-main-nav-nav-button-bg not-aria-[current=page]:system-md-medium not-aria-[current=page]:text-components-main-nav-nav-button-text not-aria-[current=page]:hover:bg-components-main-nav-nav-button-bg-hover not-aria-[current=page]:hover:text-components-main-nav-nav-button-text',
+-        'aria-[current=page]:dify-blue-glass-surface aria-[current=page]:z-1',
+-      )}
+-    >
++  const commonProps = {
++    'href': item.href,
++    'aria-current': activated ? ('page' as const) : undefined,
++    'title': item.label,
++    'className': cn(
++      'group relative flex h-8 w-full items-center gap-2 rounded-[10px] px-2 py-1.5 outline-hidden transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-state-accent-solid focus-visible:outline-solid',
++      'not-aria-[current=page]:bg-components-main-nav-nav-button-bg not-aria-[current=page]:system-md-medium not-aria-[current=page]:text-components-main-nav-nav-button-text not-aria-[current=page]:hover:bg-components-main-nav-nav-button-bg-hover not-aria-[current=page]:hover:text-components-main-nav-nav-button-text',
++      'aria-[current=page]:dify-blue-glass-surface aria-[current=page]:z-1',
++    ),
++  }
 +
-+export default function EnvironmentDirectoryPage() {
-+  return <EnvironmentManagement />
-+}
++  const content = (
++    <>
+       <NavIcon icon={item.icon} className="group-aria-[current=page]:hidden" />
+       <NavIcon icon={item.activeIcon} className="hidden group-aria-[current=page]:block" />
+       <span className="min-w-0 truncate group-aria-[current=page]:text-shadow-[0px_0px_8px_var(--color-components-main-nav-glass-text-glow)]">
+         {item.label}
+       </span>
+       {children}
++    </>
++  )
++
++  // /aiops/* 已独立由 aiops-dify-edge 托管，走整页导航以防 Next.js RSC 请求落空（ADR-0368）
++  if (item.href.startsWith('/aiops/'))
++    return <a {...commonProps}>{content}</a>
++
++  return (
++    <Link {...commonProps}>
++      {content}
+     </Link>
+   )
+ }
+--- a/web/app/components/main-nav/routes.ts
++++ b/web/app/components/main-nav/routes.ts
+@@ -77,6 +77,15 @@ export const MAIN_NAV_ROUTES = [
+     activeIcon: 'i-custom-vender-main-nav-knowledge-v2-active',
+     visibility: VISIBLE_TO_ALL,
+   },
++  {
++    key: 'environment-directory',
++    href: '/aiops/environments',
++    label: '环境与租户',
++    active: (path: string) => isPathUnderRoute(path, '/aiops/environments'),
++    icon: 'i-custom-vender-main-nav-integrations-v2',
++    activeIcon: 'i-custom-vender-main-nav-integrations-v2-active',
++    visibility: VISIBLE_TO_ALL,
++  },
+   {
+     key: 'skills',
+     href: '/skills',
