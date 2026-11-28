@@ -1,7 +1,7 @@
 # 现行架构决策索引（Active ADR Index）
 
 > **给新接手工程师的 1 分钟导读**：
-> - 本页列出主仓库 `docs/adr/` **当前生效的 125 份核心架构决策**（按领域归类）。想知道「系统为什么这样设计、哪些方案已被否决」，先看本页对应行再点进具体 ADR。
+> - 本页列出主仓库 `docs/adr/` **当前生效的 126 份核心架构决策**（按领域归类）。想知道「系统为什么这样设计、哪些方案已被否决」，先看本页对应行再点进具体 ADR。
 > - 已被取代、反转、撤回、到期，以及单一 PR / 局部 bugfix / 一次性清理的 **231 份历史与战术 ADR**，已依据 [ADR-0370](adr/0370-archive-superseded-and-tactical-adrs.md) 完整性校验后迁出至私有归档仓库 [`kilbertert/AI-Ops-history-archive`](https://github.com/kilbertert/AI-Ops-history-archive/tree/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr)（归档提交 `4bed22cb`）。
 > - 运行现状请读 [当前交付状态](agents/current-delivery-state.md)；Dify 宿主现状请直接看唯一架构入口 [`deploy/dify-36/ARCHITECTURE.md`](../deploy/dify-36/ARCHITECTURE.md)。
 
@@ -163,7 +163,7 @@
 | [ADR-0361](adr/0361-day2-environment-release-upgrade-and-rollback.md) | 已上线客户环境 Day-2 零命令行版本升级与原子安全回滚 | 已采纳 |
 | [ADR-0363](adr/0363-customer-gateway-oci-container-distribution.md) | 客户机 Gateway 通过阿里云 ACR 标准 OCI 容器镜像分发与无损切换 | 已采纳 |
 
-## 七、仓库治理、测试分层、CI 与归档规则（14 份）
+## 七、仓库治理、测试分层、CI 与归档规则（15 份）
 
 | ADR | 生效核心规则 | 状态备注 |
 |---|---|---|
@@ -181,12 +181,13 @@
 | [ADR-0357](adr/0357-converge-p2-test-markers-ci-gating-and-hotspots.md) | P2 依赖核查收口：`deploy_tooling` CI 路径门禁、`nginx` 标记与热点收敛 | Accepted |
 | [ADR-0364](adr/0364-automate-branch-lifecycle-and-mirror-cleanup.md) | 自动清理未合入关闭 PR 分支及公司 GitLab 每周周期镜像兜底 | Accepted |
 | [ADR-0370](adr/0370-archive-superseded-and-tactical-adrs.md) | 本索引与 231 份历史/局部 ADR 归档迁出规则与编号水位线声明 | 已采纳 |
+| [ADR-0371](adr/0371-automated-doc-lifecycle-and-compaction.md) | 文档自动减债闭环（Doc-GC）：写入控制、失鲜检测、定时 Autovacuum 与一键迁冷 | 已采纳 |
 
 ---
 
 ## 归档检索与编号规则
 
-- **历史 ADR 水位线**：目前最大已分配编号为 **`0370`**。新增 ADR **必须从 `0371` 起顺延递增**，禁止复用已归档的旧编号（见 [决定记录约定](agents/architecture-decisions.md#writing-one)）。
+- **历史 ADR 水位线**：目前最大已分配编号为 **`0371`**。新增 ADR **必须从 `0372` 起顺延递增**，禁止复用已归档的旧编号（见 [决定记录约定](agents/architecture-decisions.md#writing-one) 与 [策略配置](doc-lifecycle.json)）。
 - **检索已归档的历史 231 份 ADR**：
   - 所有已归档 ADR 均保留在私有仓库 [`kilbertert/AI-Ops-history-archive@4bed22cb`](https://github.com/kilbertert/AI-Ops-history-archive/tree/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr) 下的 `docs/adr/NNNN-*.md`；
   - 克隆归档仓库后可在本地通过 `sha256sum -c MANIFEST.sha256` 校验完整性，并通过 `ARCHIVE_LIST.json` 按源修订、标题或编号检索。
