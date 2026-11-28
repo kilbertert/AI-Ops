@@ -23,11 +23,11 @@
 
 | 文件 | 装到 | 作用 |
 |---|---|---|
-| `aiops-dify-login-proxy.service` | `/etc/systemd/system/` | 服务单元（身份 `aiopslogin`，**独立于**发布桥的 `aiopsbridge`） |
+| 容器 `aiops-dify-login-proxy` | 36 Docker (`aiops-dify-edge@sha256`) | 以 `aiopslogin` 只读运行（**独立于**发布桥 `aiopsbridge`，由 `deploy-edge-image.sh` 部署） |
 | `login-proxy.env.example` | `/etc/aiops-login-proxy/login-proxy.env`（0600） | 全部配置，含两把密钥 |
-| `dify-login-proxy.conf` | 控制台 server 块 / snippets | 四跳同源反代（登录/验证码/登出/发布检查） |
+| `dify-login-proxy.conf` | 控制台 server 块 / snippets | 四跳同源反代（登录/验证码/登出/发布检查，含 `X-Request-Id`） |
 | `dify-login-page.html` | `/srv/aiops-console-assets/` | **登录页**（单文件自包含），由 10008 的 `location = /signin` 提供 |
-| 代码 | `/opt/aiops-login-proxy/` | `python -m dify_login_proxy` |
+| 运行命令 | 容器 `-m dify_login_proxy` | 映射卷 `/var/lib/aiops-login-proxy`（rw） |
 
 **登录页为什么在 `ops/dify-console-bridge/` 的 conf 里接线、而不是本目录**：
 `location = /signin` 必须挂在**被两个入口共用**的那一层（10008），否则明文入口

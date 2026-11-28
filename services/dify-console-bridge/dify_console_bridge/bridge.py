@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import mimetypes
+import re
 import urllib.parse
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -219,6 +220,17 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
     settings: ClassVar[BridgeSettings]
     environment_credentials: ClassVar[dict[str, dict[str, str]]] = {}
 
+    def _request_id(self) -> str:
+        if getattr(self, "headers", None) is None:
+            return ""
+        raw = (self._single_header("X-Request-Id") or "").strip()
+        return raw if re.fullmatch(r"[A-Za-z0-9._-]{1,64}", raw) else ""
+
+    def _send_request_id_header(self) -> None:
+        rid = self._request_id()
+        if rid:
+            self.send_header("X-Request-Id", rid)
+
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler 的协议
         parsed = urllib.parse.urlsplit(self.path)
         path = parsed.path
@@ -252,6 +264,7 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
             self.send_header("Location", location)
             self.send_header("Content-Length", "0")
             self.send_header("Cache-Control", "no-store")
+            self._send_request_id_header()
             self.send_header("Connection", "close")
             self.close_connection = True
             self.end_headers()
@@ -269,6 +282,7 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "same-origin")
+        self._send_request_id_header()
         self.send_header("Connection", "close")
         self.close_connection = True
         self.end_headers()
@@ -679,6 +693,7 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self._send_request_id_header()
         self.end_headers()
         self.wfile.write(body)
 
@@ -777,13 +792,16 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self._send_request_id_header()
         self.send_header("Connection", "close")
         self.close_connection = True
         self.end_headers()
         self.wfile.write(body)
 
     def log_message(self, fmt: str, *args: Any) -> None:
-        _LOGGER.info("console-publish-bridge: " + fmt, *args)
+        rid = self._request_id()
+        prefix = f"console-publish-bridge [rid={rid}]: " if rid else "console-publish-bridge: "
+        _LOGGER.info(prefix + fmt, *args)
 
 
 def make_server(settings: BridgeSettings) -> ThreadingHTTPServer:

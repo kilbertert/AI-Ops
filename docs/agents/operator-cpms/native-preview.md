@@ -31,13 +31,10 @@ Gateway QA/run；界面 SSE 的空 thought 只是兼容旧 Agent 面板的显示
 
 ## 部署顺序
 
-1. 正常 PR/CI 合并后，等待显式版本发布；Gateway 发布后核 health 与源码 SHA。
-2. 从同一合并修订运行 `ops/dify-console-bridge/build-bundle.sh REV OUT`。打包脚本将原生
-   预览 JS 拼入已有 publish-button.js，携带更新后的 Python 桥和 nginx snippet；不重建 Dify。
-3. 按 [桥部署手册](../../../ops/dify-console-bridge/README.md) 用 dev-host 传摘要制品，运行
-   包内 deploy.sh，备份并安装原桥，核 nginx 和桥服务。公司登录代理不重启，避免清除有效会话。
-4. 正常公司登录进入 Dify 后，在该管家应用输入明确订单。页面长期打开时先刷新以加载新脚本；
-   登录代理公司令牌窗口目前为15分钟，过期时重登。不得自签会话或注入令牌缓存凑验收。
+1. PR/CI 合并后，分别通过 GitHub Actions 推送 `aiops-dify-edge` 与 `aiops-dify-web` 不可变 ACR `@sha256` 镜像（原 `build-bundle.sh` 与 `publish-button.js` 注入已于 ADR-0366 / ADR-0369 退役）。
+2. 在开发机按 [`deploy/dify-36/ARCHITECTURE.md`](../../../deploy/dify-36/ARCHITECTURE.md) 分别运行 `deploy-edge-image.sh` 与 `deploy-web-image.sh` 升级 `36`。
+3. 如 `ops/dify-console-bridge/dify-console-publish.conf` 有路由变动，需同步至 `36:/www/server/panel/vhost/nginx/snippets/` 并 `nginx -t && nginx -s reload`。
+4. 正常公司登录进入 Dify 后，在该管家应用输入明确订单验证原生预览（登录代理公司令牌窗口过期时重新登录）。
 
 ## 持续开放正式 Java 路线
 

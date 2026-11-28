@@ -660,11 +660,21 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
             raise ValueError("请求体必须是对象")
         return payload
 
+    def _request_id(self) -> str:
+        headers = getattr(self, "headers", None)
+        if headers is None:
+            return ""
+        raw = (headers.get("X-Request-Id") or "").strip()
+        return raw if re.fullmatch(r"[A-Za-z0-9._-]{1,64}", raw) else ""
+
     def _json(self, status: int, payload: dict[str, Any]) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
+        rid = self._request_id()
+        if rid:
+            self.send_header("X-Request-Id", rid)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -672,7 +682,9 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args: Any) -> None:
         # BaseHTTPRequestHandler 默认把请求行打进 stderr —— 里面可能带查询串。
         # 只打我们自己给的那句，且调用方已保证不含凭据。
-        _LOGGER.info("dify-login-proxy: " + fmt, *args)
+        rid = self._request_id()
+        prefix = f"dify-login-proxy [rid={rid}]: " if rid else "dify-login-proxy: "
+        _LOGGER.info(prefix + fmt, *args)
 
 
 def _public_reason(exc: Exception) -> str:

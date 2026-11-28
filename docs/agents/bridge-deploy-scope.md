@@ -1,54 +1,28 @@
-# 36 上的控制台桥：哪些改动 CD 不会带过去
+# 36 上的 Dify 边缘与前端改动：哪些改动由哪条 ACR 流水线负责
 
-> 2026-10-24 实做时发现的缺口。写下来是因为它**不报错**：改完代码、CI 绿、CD 绿，
-> 桥却还在跑旧逻辑。
+> 本表已按 ADR-0365 ~ 0369 更新：旧手工 `build-bundle.sh`、`deploy.sh`、systemd 与 `sub_filter` 注入脚本已全部退役；全量总览见 [`deploy/dify-36/ARCHITECTURE.md`](../../deploy/dify-36/ARCHITECTURE.md)。
 
-## 事实
+## 改动归属表（合并进 `main` 后如何到达 36）
 
-`deploy-41.sh` 用 `git archive … src/aiops_diagnostics` 推 41 的网关。
-**桥不在那条链上**：它跑在 36 的 `/opt/aiops-console-bridge`，从 `ops/dify-console-bridge/`
-的 unit 启动，代码是**手工安装的副本**。
+| 改了什么 | 触发哪条 ACR 构建 | 部署到 `36` 的命令 |
+|---|---|---|
+| `services/aiops-console/**`（`/aiops/*` 管理工作台）<br>`services/dify-console-bridge/**`<br>`services/dify-login-proxy/**` | `.github/workflows/release-dify-edge-image.yml`<br>产出 `aiops-dify-edge@sha256:...` | `bash deploy/dify-36/edge/deploy-edge-image.sh --image <EDGE_REF> --service all` |
+| `deploy/dify-36/web-patches/**`（Dify 编排页内嵌扩展 / RAGFlow 入口卡） | `.github/workflows/release-dify-web-image.yml`<br>产出 `aiops-dify-web@sha256:...` | `bash deploy/dify-36/web-patches/deploy-web-image.sh --image <WEB_REF>` |
+| `ops/dify-console-bridge/dify-console-publish.conf`<br>`ops/dify-login-proxy/dify-login-proxy.conf` | Nginx snippet 变动需同步到 `36:/www/server/panel/vhost/nginx/snippets/` | `dev-host cp 36 ... --artifact-sha256` + `nginx -t && nginx -s reload` |
 
-所以下面这些改动，合并进 main **不等于**到了生产：
-
-| 改了什么 | 要去哪里装 |
-|---|---|
-| `services/dify-console-bridge/dify_console_bridge/*.py` | 36 `/opt/aiops-console-bridge/`（由 `ops/dify-console-bridge/build-bundle.sh` 打包，`deploy.sh` 原子切换） |
-| `ops/dify-console-bridge/*.js`（注入脚本） | 36 `/srv/aiops-console-assets/` |
-| `ops/dify-console-bridge/dify-console-publish.conf` | 36 `snippets/dify-console-publish.conf`（`nginx -T` 里看到的是这个路径，不是 vhost 主文件） |
-| `deploy/dify-36/web-patches/` | 重建 web 镜像（见下） |
-
-## 怎么确认装没装
-
-**别信"我改完了"。** 每一步都有可观察的判据：
+## 怎么确认装没装（与跨跳排障）
 
 ```bash
-# 桥代码：比对 md5，不看时间戳
-md5sum /opt/aiops-console-bridge/dify_console_bridge/bridge.py
-md5sum ~/Projects/AI-Ops/services/dify-console-bridge/dify_console_bridge/bridge.py
+# 1. 核对 36 运行中的不可变 @sha256 镜像与只读身份隔离
+dev-host exec 36 --allow-service-exec -- "docker inspect --format '{{.Name}} User={{.Config.User}} Readonly={{.HostConfig.ReadonlyRootfs}} Image={{.Config.Image}}' deploy-web-1 aiops-dify-console-bridge aiops-dify-login-proxy"
 
-# nginx：改完必须 nginx -T 里能看到，而且 reload 过
-sudo nginx -T | grep -c "你的新路由"
-
-# 桥进程：重启后看 journal 里有没有新路由的行为
-sudo journalctl -u aiops-dify-console-bridge -f
+# 2. 按浏览器响应头中的 X-Request-Id 对齐查边缘双容器日志
+dev-host exec 36 --allow-service-exec -- "docker logs --since 15m aiops-dify-console-bridge 2>&1 | grep <X-Request-Id>"
+dev-host exec 36 --allow-service-exec -- "docker logs --since 15m aiops-dify-login-proxy 2>&1 | grep <X-Request-Id>"
 ```
-
-## 一个具体的坑（2026-10-24）
-
-新加 `/__aiops/knowledge-sync` 时，部署看起来"都做了"：
-
-1. nginx 配置写进了仓库 ✅
-2. 但 snippet 没装到 36 → 路由 404
-3. 装上 snippet、reload → **还是 404**
-4. 查桥日志：`POST /__aiops/knowledge-sync 404` —— **nginx 已经转发了，桥不认识这条路由**
-5. 桥的代码目录里根本没有那次改动
-
-第 4 步是关键：**nginx 的 404 与桥的 404 长得一样**，只有桥日志能区分。
-"我部署了 nginx" 与 "桥会处理它" 是两件事。
 
 ## 回滚
 
-桥：按 `ops/dify-console-bridge/README.md` 同步恢复 `aiops_diagnostics/`、`dify_console_bridge/`（若回退旧版则移除 `dify_console_bridge/`）与对应 systemd 单元 `/etc/systemd/system/aiops-dify-console-bridge.service`，随后执行 `systemctl daemon-reload && systemctl restart aiops-dify-console-bridge`（不要只换回 `aiops_diagnostics/`，否则 `ExecStart` 仍指向 `dify_console_bridge`）。
-nginx：`snippets/dify-console-publish.conf.bak-<时间戳>`，`nginx -t` 后 reload。
-web 镜像：`DIFY_WEB_IMAGE=aiops/dify-web-patched:rollback-<日期>` + `--force-recreate`。
+- Edge 侧边车与独立管理台：`bash deploy/dify-36/edge/deploy-edge-image.sh --rollback --service all`
+- Dify Web 前端：`bash deploy/dify-36/web-patches/deploy-web-image.sh --rollback`
+- Nginx snippet：还原对应 `*.bak-*` 后执行 `/www/server/nginx/sbin/nginx -t && /www/server/nginx/sbin/nginx -s reload`

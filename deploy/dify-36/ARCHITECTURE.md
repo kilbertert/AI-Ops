@@ -37,7 +37,7 @@
   bash deploy/dify-36/web-patches/deploy-web-image.sh --image <AIOPS_DIFY_WEB_IMAGE_REPO>@sha256:<64hex>
   bash deploy/dify-36/web-patches/deploy-web-image.sh --rollback
   ```
-- **升级 Dify Edge 双侧边车**（修改 `services/dify-*` 或共享依赖后由 `.github/workflows/release-dify-edge-image.yml` 自动推送 ACR）：
+- **升级 Dify Edge 双侧边车**（修改 `services/aiops-console/**`、`services/dify-*` 或共享依赖后由 `.github/workflows/release-dify-edge-image.yml` 自动推送 ACR）：
   ```bash
   bash deploy/dify-36/edge/deploy-edge-image.sh --image <AIOPS_DIFY_EDGE_IMAGE_REPO>@sha256:<64hex> --service all
   bash deploy/dify-36/edge/deploy-edge-image.sh --rollback --service all
@@ -48,7 +48,26 @@
   bash deploy/dify-36/edge/build-edge-image.sh
   ```
 
-## 4. 按需深挖的子文档
+## 4. 变更归属速查表（改什么去哪里找、编译谁）
+
+| 想改的内容 | 代码位置 | 发布流与构建耗时 | 说明 |
+|---|---|---|---|
+| **独立管理台**（`/aiops/environments`、版本发版、向导 UI） | `services/aiops-console/` | 自动构建 `aiops-dify-edge`（约 30s） | 脱离 Dify Next.js 独立打包（ADR-0368 / ADR-0369） |
+| **边缘鉴权与同源桥**（`/__aiops/*`、`/__aiops/login*`） | `services/dify-console-bridge/`、`services/dify-login-proxy/` | 同上，仅重建 `aiops-dify-edge` | 旧 `build-bundle.sh` / systemd 已退役（ADR-0369） |
+| **Dify 内嵌前端扩展**（编排页发布条、RAGFlow 入口卡） | `deploy/dify-36/web-patches/1.17.1/` | 自动构建 `aiops-dify-web`（约 6m） | 16 个 `.patch` 强绑定上游 `1.17.1` |
+| **Dify 后端补丁**（idempotent import 等） | `deploy/dify-36/patches/1.17.1/` | 手工 `apply.sh` 只读挂载 `api`/`worker` | 仅升级 Dify 上游主版本时重做 |
+
+## 5. 跨跳排障速查（`X-Request-Id`）
+
+Nginx 边缘片段（`dify-console-publish.conf` 与 `dify-login-proxy.conf`）会为每个 `/__aiops/*`、`/aiops/*` 与 `/console/api/logout` 请求生成并透传 `X-Request-Id`（同时写入响应头）。出现 403 / 502 时：
+1. 在浏览器 DevTools → Network 复制响应头里的 `X-Request-Id`；
+2. 在 `36` 按同一个 ID 直接对齐三跳日志：
+   ```bash
+   dev-host exec 36 --allow-service-exec -- "docker logs --since 15m aiops-dify-console-bridge 2>&1 | grep <X-Request-Id>"
+   dev-host exec 36 --allow-service-exec -- "docker logs --since 15m aiops-dify-login-proxy 2>&1 | grep <X-Request-Id>"
+   ```
+
+## 6. 按需深挖的子文档
 
 - Dify 实例与上游容器基准：[deploy/dify-36/README.md](README.md)
 - 前端源码补丁与 Web ACR 流水线：[deploy/dify-36/web-patches/README.md](web-patches/README.md)

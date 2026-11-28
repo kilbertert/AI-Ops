@@ -86,15 +86,19 @@ def test_decoupled_admin_console_bridge_and_web_patch_slimdown(tmp_path: Path) -
             assert exc.code == 307
             assert exc.headers["Location"] == "/signin?redirect=%2Faiops%2Fenvironments"
 
-        # 2. 带 Dify 会话 Cookie 返回 200 HTML 与安全头
+        # 2. 带 Dify 会话 Cookie 返回 200 HTML 与安全头（并透传 X-Request-Id）
         req = urllib.request.Request(
             f"{base}/aiops/environments",
-            headers={"Cookie": "__Host-access_token=tok-123"},
+            headers={
+                "Cookie": "__Host-access_token=tok-123",
+                "X-Request-Id": "req-edge-trace-001",
+            },
         )
         with urllib.request.urlopen(req) as resp:
             assert resp.status == 200
             assert "text/html" in resp.headers["Content-Type"]
             assert resp.headers["X-Frame-Options"] == "DENY"
+            assert resp.headers["X-Request-Id"] == "req-edge-trace-001"
             assert '<div id="root"></div>' in resp.read().decode("utf-8")
 
         # 3. 静态 JS 产物返回 200 application/javascript
@@ -120,9 +124,14 @@ def test_decoupled_admin_console_bridge_and_web_patch_slimdown(tmp_path: Path) -
 
     publish_conf = (ROOT / "ops/dify-console-bridge/dify-console-publish.conf").read_text(encoding="utf-8")
     assert "location ^~ /aiops {" in publish_conf
+    assert "proxy_set_header X-Request-Id $request_id;" in publish_conf
 
-    adr_368 = ROOT / "docs/adr/0368-decouple-aiops-admin-console-from-dify-web.md"
-    assert adr_368.is_file()
+    login_conf = (ROOT / "ops/dify-login-proxy/dify-login-proxy.conf").read_text(encoding="utf-8")
+    assert "proxy_set_header X-Request-Id $request_id;" in login_conf
+
+    assert (ROOT / "services/aiops-console/src/styles/icons.ts").is_file()
+    assert (ROOT / "docs/adr/0368-decouple-aiops-admin-console-from-dify-web.md").is_file()
+    assert (ROOT / "docs/adr/0369-retire-legacy-dify-edge-bundles-and-add-request-tracing.md").is_file()
 
     web_1171 = ROOT / "deploy/dify-36/web-patches/1.17.1"
     for removed in (
