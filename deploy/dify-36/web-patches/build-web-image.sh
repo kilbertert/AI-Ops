@@ -1,16 +1,13 @@
 #!/usr/bin/env bash
 # 构建**打过补丁的** dify-web 镜像。上游 web 镜像是预构建产物（没有源码），所以
-# 想改控制台界面只有一条路：按固定 tag 取源码 → 打补丁 → 构建 → 得到新镜像。
+# 想改控制台界面必须按固定 tag 取源码 → 打补丁 → webpack 构建。
 #
-# 与 patches/apply.sh 的关系：那个打的是 **api** 的补丁（文件挂载即可，因为镜像里有
-# 可读的 .py）；这里打的是 **web** 的补丁，必须重新构建，因为要产出编译后的 Next.js
-# 产物。两者同一套纪律：**版本钉死 + sha 核对**，镜像一换就拒绝执行，而不是把陈旧
-# 的补丁树烧进镜像。
+# 标准分发入口（ADR-0365）：
+#   - CI / 发布端：`deploy/dify-36/web-patches/publish-web-image.sh`（推阿里云 ACR 并产出 @sha256 元数据）
+#   - 36 宿主部署：`deploy/dify-36/web-patches/deploy-web-image.sh --image <repo>@sha256:<64hex>`
 #
-# 跑法（开发机、claude、在 deploy/dify-36/ 目录）： ./web-patches/build-web-image.sh
-#
-# 产出：$DIFY_WEB_PATCHED_IMAGE（默认 aiops/dify-web-patched:1.17.1），可直接被
-# docker-compose.yaml 的 web.image 覆盖。
+# 本脚本专注底层源码打补丁与构建镜像，产出 `$DIFY_WEB_PATCHED_IMAGE`（默认 aiops/dify-web-patched:1.17.1），
+# 请勿再手工 `docker cp` / 压 tar 复制到 36；详细说明见 `deploy/dify-36/web-patches/README.md`。
 set -euo pipefail
 cd "$(dirname "$0")/.."          # deploy/dify-36/
 
