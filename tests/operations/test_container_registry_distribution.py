@@ -1,19 +1,21 @@
-"""客户机 Gateway OCI 容器镜像分发、不可变摘要锁定与无损升级/回滚测试（ADR-0363）。
+"""客户机 Gateway 单一 OCI 容器分发、宿主机执行器与无损升级/回滚测试（ADR-0363 收敛版）。
 
 拦截的具体错误：
 1. 允许 `:latest` 或未锁定 `@sha256` 的镜像引用进入编排层；
-2. 容器启动模板遗漏 `--network host`、`--read-only`、`--cap-drop ALL` 或错误读写挂载 `/etc`；
-3. OCI 升级/冷装路径仍错误触发 24 MiB 整包 `_ensure_pool_artifacts` 跨海构建传输；
-4. `venv -> docker` 迁移或 `docker -> docker` 升级失败时未回滚或破坏客户 `production.env`。
+2. 平铺 `systemd` 容器单元遗漏 `EnvironmentFile`、`--network host`、`--read-only` 或 `--cap-drop ALL`；
+3. `host_release_agent.py` 切换失败未原子恢复 `container.env`/`unit`/`installed.json`，或改坏受保护配置；
+4. 未发布 OCI 镜像或客户机缺失 Docker 时仍静默降级或未明确报错退出。
 """
 
 from __future__ import annotations
 
 import base64
 import hashlib
+import importlib.util
 import json
 import shlex
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -24,10 +26,25 @@ from aiops_diagnostics.onboarding import (
     host_enrollment,
     registry,
     release_governance,
+    release_worker,
     wizard_dispatch,
     wizard_jobs,
     wizard_worker,
 )
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _load_host_agent():
+    spec = importlib.util.spec_from_file_location(
+        "host_release_agent",
+        REPO_ROOT / "ops/environments/gateway/host_release_agent.py",
+    )
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["host_release_agent"] = mod
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def _setup_registry(tmp_path: Path) -> tuple[Path, Path]:
@@ -92,25 +109,25 @@ def _setup_registry(tmp_path: Path) -> tuple[Path, Path]:
 
 def test_validate_image_ref_enforces_immutable_sha256_digest() -> None:
     digest = "sha256:" + "a1" * 32
-    ref = f"registry.cn-hangzhou.aliyuncs.com/aiops-release/gateway@{digest}"
+    ref = f"qushi-registry.cn-hangzhou.cr.aliyuncs.com/release/aiops-gateway@{digest}"
     reg, repo, parsed_digest = container_registry.validate_image_ref(ref)
-    assert reg == "registry.cn-hangzhou.aliyuncs.com"
-    assert repo == "aiops-release/gateway"
+    assert reg == "qushi-registry.cn-hangzhou.cr.aliyuncs.com"
+    assert repo == "release/aiops-gateway"
     assert parsed_digest == digest
 
     for bad in (
         "",
-        "registry.cn-hangzhou.aliyuncs.com/aiops-release/gateway:latest",
-        "registry.cn-hangzhou.aliyuncs.com/aiops-release/gateway:v1.43.21",
-        "registry.cn-hangzhou.aliyuncs.com/aiops-release/gateway@sha256:short",
-        f"registry.cn-hangzhou.aliyuncs.com/aiops-release/gateway@{digest};rm -rf /",
+        "qushi-registry.cn-hangzhou.cr.aliyuncs.com/release/aiops-gateway:latest",
+        "qushi-registry.cn-hangzhou.cr.aliyuncs.com/release/aiops-gateway:v1.43.22",
+        "qushi-registry.cn-hangzhou.cr.aliyuncs.com/release/aiops-gateway@sha256:short",
+        f"qushi-registry.cn-hangzhou.cr.aliyuncs.com/release/aiops-gateway@{digest};rm -rf /",
     ):
         assert container_registry.is_valid_image_ref(bad) is False
         with pytest.raises(container_registry.ContainerRegistryRefused):
             container_registry.validate_image_ref(bad)
 
 
-def test_docker_auth_and_container_runtime_hardening_templates() -> None:
+def test_flat_systemd_unit_and_isolated_docker_auth_templates() -> None:
     cfg_no_auth = container_registry.parse_registry_config_bytes(
         json.dumps(
             {
@@ -120,7 +137,6 @@ def test_docker_auth_and_container_runtime_hardening_templates() -> None:
         ).encode("utf-8")
     )
     assert cfg_no_auth is not None
-    assert cfg_no_auth["registry"] == "qushi-registry.cn-hangzhou.cr.aliyuncs.com"
     assert container_registry.render_customer_docker_config_json(cfg_no_auth) is None
 
     cfg_with_auth = container_registry.parse_registry_config_bytes(
@@ -136,33 +152,160 @@ def test_docker_auth_and_container_runtime_hardening_templates() -> None:
     )
     rendered_json = container_registry.render_customer_docker_config_json(cfg_with_auth)
     assert rendered_json is not None
-    parsed = json.loads(rendered_json)
     expected_b64 = base64.b64encode(b"aiops_reader:secret-token-value").decode("ascii")
-    assert parsed == {"auths": {"registry.cn-hangzhou.aliyuncs.com": {"auth": expected_b64}}}
-
-    digest = "sha256:" + "b2" * 32
-    ref = f"registry.cn-hangzhou.aliyuncs.com/aiops/gateway@{digest}"
-    env_txt = container_registry.render_container_env("jiejia", ref, 8788, 996, 986)
-    assert f"IMAGE_REF={ref}" in env_txt
-    assert "RUN_UID=996" in env_txt
-    assert "RUN_GID=986" in env_txt
-
-    launcher = container_registry.render_container_launcher_script()
-    assert "--network host" in launcher
-    assert "--read-only" in launcher
-    assert "--cap-drop ALL" in launcher
-    assert "--security-opt no-new-privileges:true" in launcher
-    assert "/etc/aiops-access-${ENV_NAME}:/etc/aiops-access-${ENV_NAME}:ro" in launcher
-    assert "/var/lib/aiops-access-${ENV_NAME}:/var/lib/aiops-access-${ENV_NAME}:rw" in launcher
-    assert '--user "${RUN_UID}:${RUN_GID}"' in launcher
+    assert json.loads(rendered_json) == {
+        "auths": {"registry.cn-hangzhou.aliyuncs.com": {"auth": expected_b64}}
+    }
 
     unit = container_registry.render_container_systemd_unit("jiejia")
-    assert "Requires=docker.service" in unit
-    assert "ExecStart=/opt/aiops-access-jiejia/run-container.sh" in unit
-    assert "ExecStop=/usr/bin/docker stop -t 15 aiops-access-jiejia" in unit
+    assert "EnvironmentFile=/opt/aiops-access-jiejia/container.env" in unit
+    assert "ExecStartPre=-/usr/bin/docker rm -f aiops-access-jiejia" in unit
+    assert "ExecStart=/usr/bin/docker run --rm --name aiops-access-jiejia" in unit
+    assert "--network host" in unit
+    assert "--read-only" in unit
+    assert "--cap-drop ALL" in unit
+    assert "--security-opt no-new-privileges:true" in unit
+    assert "-v /etc/aiops-access-jiejia:/etc/aiops-access-jiejia:ro" in unit
+    assert "-v /var/lib/aiops-access-jiejia:/var/lib/aiops-access-jiejia:rw" in unit
+    assert "--user ${RUN_UID}:${RUN_GID}" in unit
+    assert "${IMAGE_REF} serve --host 127.0.0.1 --port ${LOCAL_PORT}" in unit
+    assert "run-container.sh" not in unit
 
 
-def test_oci_upgrade_migrates_venv_to_docker_and_supports_rollback_without_tarball_pool(
+def test_host_release_agent_switch_auto_rollback_and_manual_rollback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent = _load_host_agent()
+    opt_base = tmp_path / "opt"
+    etc_base = tmp_path / "etc"
+    systemd_dir = tmp_path / "systemd"
+    monkeypatch.setattr(agent, "OPT_BASE", opt_base)
+    monkeypatch.setattr(agent, "ETC_BASE", etc_base)
+    monkeypatch.setattr(agent, "VAR_BASE", tmp_path / "var/lib")
+    monkeypatch.setattr(agent, "SYSTEMD_DIR", systemd_dir)
+    monkeypatch.setattr(agent, "NGINX_VHOST_EXT_BASE", tmp_path / "nginx_ext")
+
+    env = "jiejia"
+    opt_root = opt_base / f"aiops-access-{env}"
+    etc_root = etc_base / f"aiops-access-{env}"
+    opt_root.mkdir(parents=True)
+    etc_root.mkdir(parents=True)
+    systemd_dir.mkdir(parents=True)
+    (etc_root / "registry").mkdir()
+
+    prod_env = etc_root / "production.env"
+    env_json = etc_root / "registry/environment.json"
+    auth_conf = etc_root / "nginx-user-ingress-auth.conf"
+    prod_env.write_text("SECRET=keep\n", encoding="utf-8")
+    env_json.write_text('{"env":"jiejia"}\n', encoding="utf-8")
+    auth_conf.write_text("set $k 1;\n", encoding="utf-8")
+    protected = [str(prod_env), str(env_json), str(auth_conf)]
+    pre_hashes = agent._hash_files(protected)
+
+    old_digest = "sha256:" + "11" * 32
+    old_ref = f"qushi-registry.cn-hangzhou.cr.aliyuncs.com/release/aiops-gateway@{old_digest}"
+    new_digest = "sha256:" + "22" * 32
+    new_ref = f"qushi-registry.cn-hangzhou.cr.aliyuncs.com/release/aiops-gateway@{new_digest}"
+
+    (opt_root / "container.env").write_text(
+        agent._render_container_env(env, old_ref, 8788, 996, 986), encoding="utf-8"
+    )
+    (opt_root / "run-container.sh").write_text("#!/bin/sh\necho legacy\n", encoding="utf-8")
+    (systemd_dir / f"aiops-access-{env}.service").write_text("[Unit]\nDescription=old\n", encoding="utf-8")
+    (opt_root / "installed.json").write_text(
+        json.dumps(
+            {
+                "runtime_mode": "docker",
+                "version": "1.43.22+aaaaaaaaaaaa",
+                "revision": "a" * 40,
+                "image_ref": old_ref,
+                "image_digest": old_digest,
+                "port": 8788,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    stage_dir = tmp_path / "stage"
+    stage_dir.mkdir()
+    (stage_dir / f"aiops-access-{env}.service").write_text(
+        container_registry.render_container_systemd_unit(env), encoding="utf-8"
+    )
+
+    monkeypatch.setattr(agent.subprocess, "run", lambda *_a, **_k: SimpleNamespace(returncode=0))
+    monkeypatch.setattr(
+        agent, "_poll_health", lambda *_a, **_k: {"ok": True, "version": "1.43.23+bbbbbbbbbbbb"}
+    )
+
+    # 1. 成功切换：清理 run-container.sh、平铺 unit、保留 previous_release 并校零改动
+    out = agent.cmd_switch(
+        {
+            "env": env,
+            "port": 8788,
+            "stage_dir": str(stage_dir),
+            "bak_dir": str(tmp_path / "bak1"),
+            "api_domain": "",
+            "target_ver": "1.43.23+bbbbbbbbbbbb",
+            "target_rev": "b" * 40,
+            "target_tag": "v1.43.23",
+            "image_ref": new_ref,
+            "image_digest": new_digest,
+            "old_image_ref": old_ref,
+            "run_uid": 996,
+            "run_gid": 986,
+            "nginx_changed": False,
+            "pre_hashes": pre_hashes,
+        }
+    )
+    assert out["untouched_config_verified"] is True
+    assert not (opt_root / "run-container.sh").exists()
+    assert new_ref in (opt_root / "container.env").read_text(encoding="utf-8")
+    inst = json.loads((opt_root / "installed.json").read_text(encoding="utf-8"))
+    assert inst["previous_release"]["image_ref"] == old_ref
+
+    # 2. 健康检查失败时自动回滚回 v1.43.22+aaaaaaaaaaaa
+    stage_fail = tmp_path / "stage_fail"
+    stage_fail.mkdir()
+    (stage_fail / f"aiops-access-{env}.service").write_text("[Unit]\nDescription=bad\n", encoding="utf-8")
+    monkeypatch.setattr(
+        agent, "_poll_health", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("HEALTH_VERIFY_FAILED"))
+    )
+    with pytest.raises(SystemExit, match="AUTO_ROLLED_BACK:HEALTH_VERIFY_FAILED"):
+        agent.cmd_switch(
+            {
+                "env": env,
+                "port": 8788,
+                "stage_dir": str(stage_fail),
+                "bak_dir": str(tmp_path / "bak_fail"),
+                "api_domain": "",
+                "target_ver": "1.43.24+cccccccccccc",
+                "target_rev": "c" * 40,
+                "target_tag": "v1.43.24",
+                "image_ref": (
+                    f"qushi-registry.cn-hangzhou.cr.aliyuncs.com/release/aiops-gateway@sha256:{'33' * 32}"
+                ),
+                "image_digest": f"sha256:{'33' * 32}",
+                "old_image_ref": new_ref,
+                "run_uid": 996,
+                "run_gid": 986,
+                "nginx_changed": False,
+                "pre_hashes": pre_hashes,
+            }
+        )
+    assert new_ref in (opt_root / "container.env").read_text(encoding="utf-8")
+
+    # 3. 手动 docker -> docker 回滚回 old_ref
+    monkeypatch.setattr(agent.pwd, "getpwnam", lambda _u: SimpleNamespace(pw_uid=996, pw_gid=986))
+    monkeypatch.setattr(
+        agent, "_poll_health", lambda *_a, **_k: {"ok": True, "version": "1.43.22+aaaaaaaaaaaa"}
+    )
+    rb_out = agent.cmd_rollback({"env": env, "port": 8788, "api_domain": "", "protected_paths": protected})
+    assert rb_out["ok"] is True
+    assert rb_out["to_version"] == "1.43.22+aaaaaaaaaaaa"
+    assert old_ref in (opt_root / "container.env").read_text(encoding="utf-8")
+
+
+def test_oci_upgrade_rollback_and_guards_via_host_agent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     reg_path, assets_dir = _setup_registry(tmp_path)
@@ -179,78 +322,50 @@ def test_oci_upgrade_migrates_venv_to_docker_and_supports_rollback_without_tarba
     (repo / "ops/nginx/environment-user-ingress-proxy.inc").write_text("proxy_pass http://127.0.0.1:8788;\n")
     (repo / "ops/nginx/environment-user-ingress-routes.txt").write_text("GET /v1/faq/catalog\n")
     subprocess.run(["git", "add", "."], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "v21"], cwd=repo, check=True)
-    rev21 = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
-    subprocess.run(["git", "tag", "-a", "v1.43.21", "-m", "v1.43.21", rev21], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "v22"], cwd=repo, check=True)
+    rev22 = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    subprocess.run(["git", "tag", "-a", "v1.43.22", "-m", "v1.43.22", rev22], cwd=repo, check=True)
 
     (repo / "ops/nginx/environment-user-ingress-routes.txt").write_text(
         "GET /v1/faq/catalog\nGET /v1/shortcuts\n"
     )
     subprocess.run(["git", "add", "."], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "v22"], cwd=repo, check=True)
-    rev22 = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
-    subprocess.run(["git", "tag", "-a", "v1.43.22", "-m", "v1.43.22", rev22], cwd=repo, check=True)
-    subprocess.run(["git", "update-ref", "refs/remotes/origin/main", rev22], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "v23"], cwd=repo, check=True)
+    rev23 = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    subprocess.run(["git", "tag", "-a", "v1.43.23", "-m", "v1.43.23", rev23], cwd=repo, check=True)
+    subprocess.run(["git", "update-ref", "refs/remotes/origin/main", rev23], cwd=repo, check=True)
 
-    digest22 = "sha256:" + "c3" * 32
-    ref22 = f"registry.cn-hangzhou.aliyuncs.com/aiops/gateway@{digest22}"
+    digest22 = "sha256:" + "c2" * 32
+    ref22 = f"qushi-registry.cn-hangzhou.cr.aliyuncs.com/release/aiops-gateway@{digest22}"
+    digest23 = "sha256:" + "c3" * 32
+    ref23 = f"qushi-registry.cn-hangzhou.cr.aliyuncs.com/release/aiops-gateway@{digest23}"
     catalog = release_governance.collect_git_annotated_releases(
         repo,
         image_entries={
-            rev22: {
+            rev23: {
                 "schema": "aiops-gateway-image/1",
-                "tag": "v1.43.22",
-                "revision": rev22,
-                "image_ref": ref22,
-                "image_digest": digest22,
-                "image_tag": "v1.43.22",
+                "tag": "v1.43.23",
+                "revision": rev23,
+                "image_ref": ref23,
+                "image_digest": digest23,
+                "image_tag": "v1.43.23",
             }
         },
     )
-    assert catalog[0]["image_ready"] is True
-    assert catalog[0]["distribution_mode"] == "oci"
     release_governance.save_release_catalog(assets_dir, catalog)
 
-    # 确认走 OCI 路径时绝对不触发 24 MiB 整包构建
     monkeypatch.setattr(
-        wizard_worker,
-        "_ensure_pool_artifacts",
-        lambda *_a, **_kw: (_ for _ in ()).throw(AssertionError("OCI 路径不应构建离线 tarball")),
-    )
-    monkeypatch.setattr(
-        wizard_worker,
-        "_read_registry_config_from_central",
-        lambda *_a, **_kw: {
-            "schema": "aiops-container-registry/1",
-            "registry": "registry.cn-hangzhou.aliyuncs.com",
-            "repository": "registry.cn-hangzhou.aliyuncs.com/aiops/gateway",
-            "pull_username": "aiops_pull",
-            "pull_password": "pull-password",
-        },
-    )
-    monkeypatch.setattr(
-        wizard_worker,
-        "_read_image_catalog_from_central",
-        lambda *_a, **_kw: {
-            rev22: {
-                "schema": "aiops-gateway-image/1",
-                "tag": "v1.43.22",
-                "revision": rev22,
-                "image_ref": ref22,
-                "image_digest": digest22,
-                "image_repo": "registry.cn-hangzhou.aliyuncs.com/aiops/gateway",
-                "image_tag": "v1.43.22",
-            }
-        },
-    )
-    monkeypatch.setattr(
-        wizard_worker.container_registry,
+        release_worker.container_registry,
         "discover_release_images_from_github",
         lambda *_a, **_kw: {},
     )
+    monkeypatch.setattr(
+        release_worker,
+        "_read_registry_config_from_central",
+        lambda *_a, **_kw: None,
+    )
 
     state_store: dict[str, dict] = {}
-    copied_remotes: list[str] = []
 
     def fake_request(payload: dict) -> dict:
         op = payload.get("wizard_job")
@@ -280,178 +395,167 @@ def test_oci_upgrade_migrates_venv_to_docker_and_supports_rollback_without_tarba
         return {}
 
     runtime_state = {
-        "mode": "venv",
-        "ver": f"1.43.21+{rev21[:12]}",
-        "rev": rev21,
-        "img_ref": "",
-        "digest": "",
+        "ver": f"1.43.22+{rev22[:12]}",
+        "rev": rev22,
+        "img_ref": ref22,
+        "digest": digest22,
         "prev": None,
+        "docker": True,
     }
+    copied: list[str] = []
 
-    class FakeOciHost:
+    class FakeAgentHost:
         def copy_file(self, _local: Path, remote: str) -> None:
-            copied_remotes.append(remote)
+            copied.append(remote)
 
-        def run_cmd(self, cmd: str, *, timeout_sec: int = 120) -> subprocess.CompletedProcess[str]:
-            if cmd.startswith("python3 -c "):
-                compile(shlex.split(cmd)[2], "<remote-python>", "exec")
-            if "installed.json" in cmd and "docker_available" in cmd:
-                return subprocess.CompletedProcess(
-                    cmd,
-                    0,
-                    stdout=json.dumps(
-                        {
-                            "port": 8788,
-                            "runtime_mode": runtime_state["mode"],
-                            "docker_available": True,
-                            "current_image_ref": runtime_state["img_ref"],
-                            "current_image_digest": runtime_state["digest"],
-                            "current_is_symlink": runtime_state["mode"] == "venv",
-                            "current_release_dir": f"/opt/aiops-access-jiejia/releases/{rev21[:12]}",
-                            "current_release_name": rev21[:12],
-                            "installed_version": runtime_state["ver"],
-                            "installed_revision": runtime_state["rev"],
-                            "python_minor": "3.12",
-                            "health": {
-                                "ok": True,
-                                "version": runtime_state["ver"],
-                                "business_mutations": "disabled",
-                            },
-                            "user_conf": "",
-                            "proxy_inc": "",
-                            "previous_release": runtime_state["prev"],
-                        }
-                    ),
-                    stderr="",
-                )
-            if "docker" in cmd and "smoke_ver" in cmd and "IMAGE_VERSION_MISMATCH" in cmd:
-                return subprocess.CompletedProcess(
-                    cmd,
-                    0,
-                    stdout=json.dumps(
-                        {
-                            "pre_hashes": {"/etc/aiops-access-jiejia/production.env": "deadbeef"},
-                            "old_release_dir": f"/opt/aiops-access-jiejia/releases/{rev21[:12]}",
-                            "old_image_ref": runtime_state["img_ref"],
-                            "run_uid": 996,
-                            "run_gid": 986,
-                        }
-                    ),
-                    stderr="",
-                )
-            if "AUTO_ROLLED_BACK" in cmd:
-                runtime_state["prev"] = {
-                    "runtime_mode": "venv",
-                    "release_dir": f"/opt/aiops-access-jiejia/releases/{rev21[:12]}",
-                    "version": f"1.43.21+{rev21[:12]}",
-                    "revision": rev21,
-                    "systemd_unit_backup": "/var/backups/bak/unit.bak",
-                    "nginx_backup_dir": "/var/backups/bak",
-                    "recorded_at": 200.0,
-                }
-                runtime_state["mode"] = "docker"
-                runtime_state["ver"] = f"1.43.22+{rev22[:12]}"
-                runtime_state["rev"] = rev22
-                runtime_state["img_ref"] = ref22
-                runtime_state["digest"] = digest22
-                return subprocess.CompletedProcess(
-                    cmd, 0, stdout=json.dumps({"ok": True, "untouched_config_verified": True}), stderr=""
-                )
-            if "nginx_changed" in cmd:
-                return subprocess.CompletedProcess(
-                    cmd, 0, stdout=json.dumps({"nginx_changed": True}), stderr=""
-                )
-            if "PREVIOUS_RELEASE_MISSING" in cmd:
-                return subprocess.CompletedProcess(
-                    cmd,
-                    0,
-                    stdout=json.dumps(
-                        {
-                            "prev_mode": "venv",
-                            "prev_ver": f"1.43.21+{rev21[:12]}",
-                            "prev_rev": rev21,
-                            "prev_dir": f"/opt/aiops-access-jiejia/releases/{rev21[:12]}",
-                            "has_nginx_bak": True,
-                        }
-                    ),
-                    stderr="",
-                )
-            if "ROLLBACK_HEALTH_VERIFY_FAILED" in cmd:
-                runtime_state["mode"] = "venv"
-                runtime_state["ver"] = f"1.43.21+{rev21[:12]}"
-                runtime_state["rev"] = rev21
-                runtime_state["img_ref"] = ""
-                runtime_state["digest"] = ""
-                runtime_state["prev"] = None
-                return subprocess.CompletedProcess(
-                    cmd,
-                    0,
-                    stdout=json.dumps(
-                        {
-                            "ok": True,
-                            "runtime_mode": "venv",
-                            "nginx_restored": True,
-                            "untouched_config_verified": True,
-                        }
-                    ),
-                    stderr="",
-                )
+        def run_cmd(
+            self, cmd: str, *, input_data: bytes | str | None = None, timeout_sec: int = 120
+        ) -> subprocess.CompletedProcess[str]:
+            if cmd.startswith("python3 - "):
+                assert input_data and "def cmd_switch" in str(input_data)
+                parts = shlex.split(cmd)
+                subcmd = parts[2]
+                if subcmd == "probe":
+                    return subprocess.CompletedProcess(
+                        cmd,
+                        0,
+                        stdout=json.dumps(
+                            {
+                                "port": 8788,
+                                "runtime_mode": "docker",
+                                "docker_available": runtime_state["docker"],
+                                "current_image_ref": runtime_state["img_ref"],
+                                "current_image_digest": runtime_state["digest"],
+                                "current_release_name": runtime_state["digest"][:19],
+                                "installed_version": runtime_state["ver"],
+                                "installed_revision": runtime_state["rev"],
+                                "python_minor": "3.12",
+                                "health": {
+                                    "ok": True,
+                                    "version": runtime_state["ver"],
+                                    "business_mutations": "disabled",
+                                },
+                                "user_conf": "",
+                                "proxy_inc": "",
+                                "previous_release": runtime_state["prev"],
+                            }
+                        ),
+                        stderr="",
+                    )
+                if subcmd == "pull-verify":
+                    return subprocess.CompletedProcess(
+                        cmd,
+                        0,
+                        stdout=json.dumps(
+                            {
+                                "pre_hashes": {"/etc/aiops-access-jiejia/production.env": "abc"},
+                                "old_image_ref": runtime_state["img_ref"],
+                                "run_uid": 996,
+                                "run_gid": 986,
+                            }
+                        ),
+                        stderr="",
+                    )
+                if subcmd == "sync-nginx":
+                    return subprocess.CompletedProcess(
+                        cmd, 0, stdout=json.dumps({"nginx_changed": True}), stderr=""
+                    )
+                if subcmd == "switch":
+                    runtime_state["prev"] = {
+                        "runtime_mode": "docker",
+                        "version": f"1.43.22+{rev22[:12]}",
+                        "revision": rev22,
+                        "image_ref": ref22,
+                        "image_digest": digest22,
+                        "nginx_backup_dir": "/var/backups/bak",
+                        "recorded_at": 100.0,
+                    }
+                    runtime_state["ver"] = f"1.43.23+{rev23[:12]}"
+                    runtime_state["rev"] = rev23
+                    runtime_state["img_ref"] = ref23
+                    runtime_state["digest"] = digest23
+                    return subprocess.CompletedProcess(
+                        cmd, 0, stdout=json.dumps({"ok": True, "untouched_config_verified": True}), stderr=""
+                    )
+                if subcmd == "rollback":
+                    runtime_state["ver"] = f"1.43.22+{rev22[:12]}"
+                    runtime_state["rev"] = rev22
+                    runtime_state["img_ref"] = ref22
+                    runtime_state["digest"] = digest22
+                    runtime_state["prev"] = None
+                    return subprocess.CompletedProcess(
+                        cmd,
+                        0,
+                        stdout=json.dumps(
+                            {"ok": True, "nginx_restored": True, "untouched_config_verified": True}
+                        ),
+                        stderr="",
+                    )
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
-    ctx = SimpleNamespace(version="1.43.22+cafecafe1234")
+    ctx = SimpleNamespace(version="1.43.23+cafecafe1234")
     enqueued = wizard_dispatch.dispatch_wizard(
         ctx,
         object(),
         {
             "wizard_action": "environment_upgrade",
-            "wizard_payload": {"environment": "jiejia", "target_tag": "v1.43.22"},
+            "wizard_payload": {"environment": "jiejia", "target_tag": "v1.43.23"},
         },
         access_fn=lambda _c, _s: ("u-admin", {}, {"*"}),
         path_fn=lambda _c: str(reg_path),
         identity_fn=lambda _c, _caller: ("41", "t-admin", "u-admin"),
     )
-    assert enqueued["request"]["target_image_ref"] == ref22
-
     done = wizard_worker.execute_environment_upgrade_job(
         repo,
         "41",
         enqueued,
         request=fake_request,
-        pinned_factory=lambda *_a, **_kw: FakeOciHost(),
+        pinned_factory=lambda *_a, **_kw: FakeAgentHost(),
         public_smoke_fn=lambda *_a: {"passed": True, "checks": []},
     )
-    assert done["passed"] is True, done
+    assert done["passed"] is True
     assert done["distribution_mode"] == "oci"
     assert done["runtime_mode"] == "docker"
-    assert done["image_digest"] == digest22
-    assert done["to_version"] == f"1.43.22+{rev22[:12]}"
-    # 确认没有 SCP application.tar.gz，仅传输了轻量脚本/nginx/隔离认证文件
-    assert not any(r.endswith("application.tar.gz") for r in copied_remotes)
-    assert any(r.endswith("run-container.sh") for r in copied_remotes)
-    assert state_store["jiejia"]["runtime_mode"] == "docker"
-    assert state_store["jiejia"]["current_image_digest"] == digest22
+    assert done["image_digest"] == digest23
+    assert done["to_version"] == f"1.43.23+{rev23[:12]}"
+    assert not any(c.endswith("run-container.sh") for c in copied)
+    assert state_store["jiejia"]["current_image_digest"] == digest23
 
-    # 校验 Dify 总览页显示 Docker 运行态与 OCI 镜像就绪状态
-    overview = wizard_dispatch.dispatch_wizard(
-        ctx,
-        object(),
-        {"wizard_action": "release_overview", "wizard_payload": {"environment": "jiejia"}},
-        access_fn=lambda _c, _s: ("u-admin", {}, {"*"}),
-        path_fn=lambda _c: str(reg_path),
-        identity_fn=lambda _c, _caller: ("41", "t-admin", "u-admin"),
+    # 验证未发布镜像版本被严格拒绝（无 venv 降级）
+    unbuilt_job = wizard_jobs.enqueue_job(
+        reg_path,
+        environment="jiejia",
+        action="environment_upgrade",
+        request={
+            "environment": "jiejia",
+            "target_tag": "v1.43.22",
+            "target_revision": rev22,
+            "target_version": "1.43.22",
+            "target_full_version": f"1.43.22+{rev22[:12]}",
+            "gateway_url": "https://api.juxichongdian.cn",
+            "api_domain": "api.juxichongdian.cn",
+            "tenant_id": "1990990768688599040",
+        },
     )
-    # 仅验证概览数据结构不报错且包含 OCI 条目
-    assert overview["latest_release"]["image_ready"] is True
-    assert overview["latest_release"]["image_digest"] == digest22
+    unbuilt_done = wizard_worker.execute_environment_upgrade_job(
+        repo,
+        "41",
+        unbuilt_job,
+        request=fake_request,
+        pinned_factory=lambda *_a, **_kw: FakeAgentHost(),
+        public_smoke_fn=lambda *_a: {"passed": True, "checks": []},
+    )
+    assert unbuilt_done["passed"] is False
+    assert unbuilt_done["error_code"] == "ENVIRONMENT_RELEASE_IMAGE_NOT_PUBLISHED"
 
-    # 再验 docker -> venv 回滚也能顺利切回原发布
+    # 验证 docker -> docker 手动一键回滚
     rb_job = wizard_jobs.enqueue_job(
         reg_path,
         environment="jiejia",
         action="environment_rollback",
         request={
             "environment": "jiejia",
-            "target_version": f"1.43.21+{rev21[:12]}",
+            "target_version": f"1.43.22+{rev22[:12]}",
             "gateway_url": "https://api.juxichongdian.cn",
             "api_domain": "api.juxichongdian.cn",
             "tenant_id": "1990990768688599040",
@@ -462,57 +566,14 @@ def test_oci_upgrade_migrates_venv_to_docker_and_supports_rollback_without_tarba
         "41",
         rb_job,
         request=fake_request,
-        pinned_factory=lambda *_a, **_kw: FakeOciHost(),
+        pinned_factory=lambda *_a, **_kw: FakeAgentHost(),
         public_smoke_fn=lambda *_a: {"passed": True, "checks": []},
     )
     assert rb_done["passed"] is True
-    assert rb_done["runtime_mode"] == "venv"
-    assert rb_done["to_version"] == f"1.43.21+{rev21[:12]}"
-
-    # 再验 docker -> docker 升级以及 switch_and_verify 失败触发自动回退
-    runtime_state["mode"] = "docker"
-    runtime_state["img_ref"] = f"registry.cn-hangzhou.aliyuncs.com/aiops/gateway@sha256:{'11' * 32}"
-    runtime_state["digest"] = f"sha256:{'11' * 32}"
-
-    class FailingOciSwitchHost(FakeOciHost):
-        def run_cmd(self, cmd: str, *, timeout_sec: int = 120) -> subprocess.CompletedProcess[str]:
-            if "AUTO_ROLLED_BACK" in cmd:
-                return subprocess.CompletedProcess(
-                    cmd, 1, stdout="", stderr="AUTO_ROLLED_BACK:HEALTH_VERIFY_FAILED"
-                )
-            return super().run_cmd(cmd, timeout_sec=timeout_sec)
-
-    fail_job = wizard_jobs.enqueue_job(
-        reg_path,
-        environment="jiejia",
-        action="environment_upgrade",
-        request={
-            "environment": "jiejia",
-            "target_tag": "v1.43.22",
-            "target_revision": rev22,
-            "target_version": "1.43.22",
-            "target_full_version": f"1.43.22+{rev22[:12]}",
-            "target_image_ref": ref22,
-            "target_image_digest": digest22,
-            "gateway_url": "https://api.juxichongdian.cn",
-            "api_domain": "api.juxichongdian.cn",
-            "tenant_id": "1990990768688599040",
-        },
-    )
-    fail_done = wizard_worker.execute_environment_upgrade_job(
-        repo,
-        "41",
-        fail_job,
-        request=fake_request,
-        pinned_factory=lambda *_a, **_kw: FailingOciSwitchHost(),
-        public_smoke_fn=lambda *_a: {"passed": True, "checks": []},
-    )
-    assert fail_done["passed"] is False
-    assert fail_done["failed_step"] == "switch_and_verify"
-    assert fail_done["rolled_back_automatically"] is True
+    assert rb_done["to_version"] == f"1.43.22+{rev22[:12]}"
 
 
-def test_oci_cold_install_and_onboard_skips_tarball_pool(
+def test_oci_cold_install_and_onboard_calls_host_agent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     files_bytes = {
@@ -522,43 +583,59 @@ def test_oci_cold_install_and_onboard_skips_tarball_pool(
     }
     hashes = {k: hashlib.sha256(v).hexdigest() for k, v in files_bytes.items()}
     digest = "sha256:" + "d4" * 32
-    ref = f"registry.cn-hangzhou.aliyuncs.com/aiops/gateway@{digest}"
+    ref = f"qushi-registry.cn-hangzhou.cr.aliyuncs.com/release/aiops-gateway@{digest}"
 
-    monkeypatch.setattr(subprocess, "check_output", lambda *_a, **_k: "e" * 40 + "\n")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    (repo / "ops/nginx").mkdir(parents=True)
+    (repo / "ops/nginx/environment-user-ingress.conf").write_text("location = /v1/faq/catalog {}\n")
+    (repo / "ops/nginx/environment-user-ingress-proxy.inc").write_text("proxy_pass http://127.0.0.1:8788;\n")
+    (repo / "ops/nginx/environment-user-ingress-routes.txt").write_text("GET /v1/faq/catalog\n")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "v23"], cwd=repo, check=True)
+    rev = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    subprocess.run(["git", "tag", "-a", "v1.43.23", "-m", "v1.43.23", rev], cwd=repo, check=True)
+    subprocess.run(["git", "update-ref", "refs/remotes/origin/main", rev], cwd=repo, check=True)
+
     monkeypatch.setattr(
-        wizard_worker,
-        "_ensure_pool_artifacts",
-        lambda *_a, **_kw: (_ for _ in ()).throw(AssertionError("OCI 冷装不应触发 tarball 构建")),
-    )
-    monkeypatch.setattr(
-        wizard_worker,
-        "_resolve_oci_image_for_revision",
+        release_worker.container_registry,
+        "discover_release_images_from_github",
         lambda *_a, **_kw: {
-            "schema": "aiops-gateway-image/1",
-            "tag": "v1.43.22",
-            "revision": "e" * 40,
-            "image_ref": ref,
-            "image_digest": digest,
+            rev: {
+                "schema": "aiops-gateway-image/1",
+                "tag": "v1.43.23",
+                "revision": rev,
+                "image_ref": ref,
+                "image_digest": digest,
+            }
         },
     )
-    monkeypatch.setattr(wizard_worker, "_read_registry_config_from_central", lambda *_a, **_kw: None)
+    monkeypatch.setattr(release_worker, "_read_registry_config_from_central", lambda *_a, **_kw: None)
     monkeypatch.setattr(wizard_worker, "_dev_host_read", lambda _t, p, **_k: files_bytes[p])
 
-    copied: list[str] = []
-    cmds: list[str] = []
+    subcmds: list[str] = []
 
     class _Pin:
-        def copy_file(self, _src: Path, dst: str) -> None:
-            copied.append(dst)
+        def copy_file(self, _src: Path, _dst: str) -> None:
+            return None
 
         def run_cmd(self, cmd: str, **_k):
-            cmds.append(cmd)
-            if "AIOPS_DOCKER_OK" in cmd:
-                return SimpleNamespace(returncode=0, stdout=b"AIOPS_DOCKER_OK\n", stderr=b"")
+            if cmd.startswith("python3 - "):
+                sub = shlex.split(cmd)[2]
+                subcmds.append(sub)
+                if sub == "probe":
+                    return SimpleNamespace(
+                        returncode=0, stdout=json.dumps({"docker_available": True}), stderr=""
+                    )
+                if sub == "cold-install":
+                    return SimpleNamespace(returncode=0, stdout=json.dumps({"ok": True}), stderr="")
             return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
 
     out = wizard_worker._step_cold_install_and_onboard(
-        tmp_path,
+        repo,
         "41",
         lambda _p: {
             "ok": True,
@@ -575,5 +652,4 @@ def test_oci_cold_install_and_onboard_skips_tarball_pool(
     assert out["ok"] is True
     assert out["runtime_mode"] == "docker"
     assert out["image_digest"] == digest
-    assert not any(c.endswith("application.tar.gz") or c.endswith("installer.tar.gz") for c in copied)
-    assert any("docker pull" in c and "seed_target_gateway_db" in c for c in cmds)
+    assert subcmds == ["probe", "cold-install"]

@@ -10,9 +10,7 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
-import shlex
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,6 +22,7 @@ from aiops_diagnostics.onboarding import (
     host_enrollment,
     registry,
     release_governance,
+    release_worker,
     wizard_dispatch,
     wizard_jobs,
     wizard_worker,
@@ -239,16 +238,7 @@ def test_dispatch_release_overview_guards_control_41_and_validates_inputs(tmp_pa
         )
 
 
-def _wrap_missing_dev_host(orig_run: object):
-    def _runner(argv, *args, **kwargs):
-        if isinstance(argv, (list, tuple)) and argv and argv[0] == "dev-host":
-            raise FileNotFoundError("dev-host")
-        return orig_run(argv, *args, **kwargs)  # type: ignore[operator]
-
-    return _runner
-
-
-def test_worker_upgrade_and_rollback_verify_zero_touch_and_auto_rollback(
+def test_wizard_worker_upgrade_rejects_missing_docker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     reg_path, assets_dir = _setup_registry_with_jiejia(tmp_path)
@@ -258,57 +248,51 @@ def test_worker_upgrade_and_rollback_verify_zero_touch_and_auto_rollback(
     subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
     subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
     (repo / "ops/nginx").mkdir(parents=True)
-    (repo / "ops/nginx/environment-user-ingress.conf").write_text(
-        "# （环境 __ENV__）\n"
-        "location = /v1/faq/catalog {\n"
-        "  include /etc/aiops-access-__ENV__/environment-user-ingress-proxy.inc;\n"
-        "}\n"
-    )
+    (repo / "ops/nginx/environment-user-ingress.conf").write_text("# (__ENV__)\n")
     (repo / "ops/nginx/environment-user-ingress-proxy.inc").write_text("proxy_pass http://127.0.0.1:8788;\n")
     (repo / "ops/nginx/environment-user-ingress-routes.txt").write_text("GET /v1/faq/catalog\n")
     subprocess.run(["git", "add", "."], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "v19"], cwd=repo, check=True)
-    rev19 = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
-    subprocess.run(["git", "tag", "-a", "v1.43.19", "-m", "v1.43.19", rev19], cwd=repo, check=True)
-
-    (repo / "ops/nginx/environment-user-ingress-routes.txt").write_text(
-        "GET /v1/faq/catalog\nPOST /v1/health-report-jobs\n"
-    )
-    subprocess.run(["git", "add", "."], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "v20"], cwd=repo, check=True)
-    rev20 = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
-    subprocess.run(["git", "tag", "-a", "v1.43.20", "-m", "v1.43.20", rev20], cwd=repo, check=True)
-    subprocess.run(["git", "update-ref", "refs/remotes/origin/main", rev20], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "v23"], cwd=repo, check=True)
+    rev23 = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    subprocess.run(["git", "tag", "-a", "v1.43.23", "-m", "v1.43.23", rev23], cwd=repo, check=True)
+    subprocess.run(["git", "update-ref", "refs/remotes/origin/main", rev23], cwd=repo, check=True)
 
     catalog = release_governance.collect_git_annotated_releases(repo)
+    catalog[0].update(
+        {
+            "distribution": "oci",
+            "image_ready": True,
+            "image_ref": f"acr.example.com/release/aiops-gateway@sha256:{'a' * 64}",
+            "image_digest": f"sha256:{'a' * 64}",
+        }
+    )
     release_governance.save_release_catalog(assets_dir, catalog)
 
-    app_archive = tmp_path / "app20.tar.gz"
-    app_archive.write_bytes(b"mock-tar")
-    app_sha = hashlib.sha256(b"mock-tar").hexdigest()
     monkeypatch.setattr(
-        wizard_worker,
-        "_ensure_pool_artifacts",
+        release_worker,
+        "sync_release_catalog_to_central",
+        lambda *_a, **_kw: catalog,
+    )
+    monkeypatch.setattr(
+        release_worker,
+        "_read_registry_config_from_central",
         lambda *_a, **_kw: {
-            "revision": rev20,
-            "python_minor": "3.12",
-            "app_remote": "/var/lib/aiops-41/onboarding-assets/app20.tar.gz",
-            "app_sha256": app_sha,
-            "app_local": str(app_archive),
-            "inst_remote": "/var/lib/aiops-41/onboarding-assets/inst.tar.gz",
-            "inst_sha256": "0" * 64,
-            "inst_local": "",
+            "image_repo": "acr.example.com/release/aiops-gateway",
+            "requires_pull_auth": False,
         },
     )
 
-    state_store: dict[str, dict] = {}
+    class _NoDockerHost:
+        def run_cmd(self, cmd: str, *, timeout_sec: int = 120, input_data=None):
+            if "probe" in cmd:
+                return subprocess.CompletedProcess(
+                    cmd, 0, stdout=json.dumps({"docker_available": False, "port": 8788}), stderr=""
+                )
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
     def fake_request(payload: dict) -> dict:
         op = payload.get("wizard_job")
         if op == "save_release_catalog":
-            return {"ok": True}
-        if op == "save_release_state":
-            state_store[payload["environment"]] = payload["state"]
             return {"ok": True}
         if op == "progress":
             return wizard_jobs.update_job_progress(
@@ -330,227 +314,37 @@ def test_worker_upgrade_and_rollback_verify_zero_touch_and_auto_rollback(
             )
         return {}
 
-    current_ver = f"1.43.19+{rev19[:12]}"
-    copied_files: list[str] = []
-
-    class FakePinnedHost:
-        def copy_file(self, _local: Path, remote: str) -> None:
-            copied_files.append(remote)
-
-        def run_cmd(self, cmd: str, *, timeout_sec: int = 120) -> subprocess.CompletedProcess[str]:
-            if cmd.startswith("python3 -c "):
-                parts = shlex.split(cmd)
-                compile(parts[2], "<remote-python>", "exec")
-            if "python3 -c" in cmd and "installed.json" in cmd and "current_release_dir" in cmd:
-                return subprocess.CompletedProcess(
-                    cmd,
-                    0,
-                    stdout=json.dumps(
-                        {
-                            "port": 8788,
-                            "current_is_symlink": True,
-                            "current_release_dir": f"/opt/aiops-access-jiejia/releases/{rev19[:12]}",
-                            "current_release_name": rev19[:12],
-                            "installed_version": current_ver,
-                            "installed_revision": rev19,
-                            "python_minor": "3.12",
-                            "health": {"ok": True, "version": current_ver, "business_mutations": "disabled"},
-                            "user_conf": "",
-                            "proxy_inc": "",
-                            "previous_release": {
-                                "release_dir": f"/opt/aiops-access-jiejia/releases/{rev19[:12]}",
-                                "version": f"1.43.19+{rev19[:12]}",
-                                "revision": rev19,
-                                "nginx_backup_dir": "/var/backups/bak1",
-                                "recorded_at": 100.0,
-                            },
-                        }
-                    ),
-                    stderr="",
-                )
-            if "pre_hashes" in cmd and "ARCHIVE_SHA_MISMATCH" in cmd:
-                return subprocess.CompletedProcess(
-                    cmd,
-                    0,
-                    stdout=json.dumps(
-                        {
-                            "pre_hashes": {"/etc/aiops-access-jiejia/production.env": "abc"},
-                            "old_release_dir": f"/opt/aiops-access-jiejia/releases/{rev19[:12]}",
-                        }
-                    ),
-                    stderr="",
-                )
-            if "AUTO_ROLLED_BACK" in cmd:
-                nonlocal_update(f"1.43.20+{rev20[:12]}")
-                return subprocess.CompletedProcess(
-                    cmd,
-                    0,
-                    stdout=json.dumps({"ok": True, "untouched_config_verified": True}),
-                    stderr="",
-                )
-            if "nginx_changed" in cmd:
-                return subprocess.CompletedProcess(
-                    cmd, 0, stdout=json.dumps({"nginx_changed": True}), stderr=""
-                )
-            if "PREVIOUS_RELEASE_MISSING" in cmd:
-                return subprocess.CompletedProcess(
-                    cmd,
-                    0,
-                    stdout=json.dumps(
-                        {
-                            "prev_ver": f"1.43.19+{rev19[:12]}",
-                            "prev_rev": rev19,
-                            "prev_dir": f"/opt/aiops-access-jiejia/releases/{rev19[:12]}",
-                            "has_nginx_bak": True,
-                        }
-                    ),
-                    stderr="",
-                )
-            if "ROLLBACK_HEALTH_VERIFY_FAILED" in cmd:
-                nonlocal_update(f"1.43.19+{rev19[:12]}")
-                return subprocess.CompletedProcess(
-                    cmd,
-                    0,
-                    stdout=json.dumps(
-                        {"ok": True, "nginx_restored": True, "untouched_config_verified": True}
-                    ),
-                    stderr="",
-                )
-            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-    def nonlocal_update(ver: str) -> None:
-        nonlocal current_ver
-        current_ver = ver
-
     job = wizard_jobs.enqueue_job(
         reg_path,
         environment="jiejia",
         action="environment_upgrade",
         request={
             "environment": "jiejia",
-            "target_tag": "v1.43.20",
-            "target_revision": rev20,
-            "target_version": "1.43.20",
-            "target_full_version": f"1.43.20+{rev20[:12]}",
+            "target_tag": "v1.43.23",
+            "target_revision": rev23,
+            "target_version": "1.43.23",
+            "target_full_version": f"1.43.23+{rev23[:12]}",
             "gateway_url": "https://api.juxichongdian.cn",
             "api_domain": "api.juxichongdian.cn",
             "tenant_id": "1990990768688599040",
         },
     )
-    # 模拟 CI 容器环境缺失 dev-host 时，catalog 同步仍安全降级而不阻断升级
-    monkeypatch.setattr(
-        wizard_worker.subprocess,
-        "run",
-        _wrap_missing_dev_host(subprocess.run),
-    )
-
     done = wizard_worker.execute_environment_upgrade_job(
         repo,
         "41",
         job,
         request=fake_request,
-        pinned_factory=lambda *_a, **_kw: FakePinnedHost(),
-        public_smoke_fn=lambda *_a: {"passed": True, "checks": []},
+        pinned_factory=lambda *_a, **_kw: _NoDockerHost(),
     )
-    assert done["passed"] is True, done
-    assert done["to_version"] == f"1.43.20+{rev20[:12]}"
-    assert done["untouched_config_verified"] is True
-    assert done["nginx_changed"] is True
-    assert state_store["jiejia"]["current_version"] == f"1.43.20+{rev20[:12]}"
-
-    # 再验一键回滚回到 1.43.19
-    rb_job = wizard_jobs.enqueue_job(
-        reg_path,
-        environment="jiejia",
-        action="environment_rollback",
-        request={
-            "environment": "jiejia",
-            "target_version": f"1.43.19+{rev19[:12]}",
-            "gateway_url": "https://api.juxichongdian.cn",
-            "api_domain": "api.juxichongdian.cn",
-            "tenant_id": "1990990768688599040",
-        },
-    )
-    rb_done = wizard_worker.execute_environment_rollback_job(
-        repo,
-        "41",
-        rb_job,
-        request=fake_request,
-        pinned_factory=lambda *_a, **_kw: FakePinnedHost(),
-        public_smoke_fn=lambda *_a: {"passed": True, "checks": []},
-    )
-    assert rb_done["passed"] is True
-    assert rb_done["to_version"] == f"1.43.19+{rev19[:12]}"
-    assert rb_done["untouched_config_verified"] is True
-    assert rb_done["nginx_changed"] is True
-
-    # 模拟 switch_and_verify 失败时记录 rolled_back_automatically=True
-    class FailingSwitchHost(FakePinnedHost):
-        def run_cmd(self, cmd: str, *, timeout_sec: int = 120) -> subprocess.CompletedProcess[str]:
-            if "AUTO_ROLLED_BACK" in cmd:
-                return subprocess.CompletedProcess(
-                    cmd, 1, stdout="", stderr="AUTO_ROLLED_BACK:HEALTH_VERIFY_FAILED"
-                )
-            return super().run_cmd(cmd, timeout_sec=timeout_sec)
-
-    fail_job = wizard_jobs.enqueue_job(
-        reg_path,
-        environment="jiejia",
-        action="environment_upgrade",
-        request={
-            "environment": "jiejia",
-            "target_tag": "v1.43.20",
-            "target_revision": rev20,
-            "target_version": "1.43.20",
-            "target_full_version": f"1.43.20+{rev20[:12]}",
-            "gateway_url": "https://api.juxichongdian.cn",
-            "api_domain": "api.juxichongdian.cn",
-            "tenant_id": "1990990768688599040",
-        },
-    )
-    fail_done = wizard_worker.execute_environment_upgrade_job(
-        repo,
-        "41",
-        fail_job,
-        request=fake_request,
-        pinned_factory=lambda *_a, **_kw: FailingSwitchHost(),
-        public_smoke_fn=lambda *_a: {"passed": True, "checks": []},
-    )
-    assert fail_done["passed"] is False
-    assert fail_done["failed_step"] == "switch_and_verify"
-    assert fail_done["rolled_back_automatically"] is True
+    assert done["passed"] is False
+    assert done["error_code"] == "ENVIRONMENT_DOCKER_REQUIRED"
+    assert done["failed_step"] == "resolve_artifact"
 
 
-def test_cross_region_transfer_defaults_to_480s_and_caches_before_cp(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_cross_region_cp_defaults_to_480s() -> None:
     import inspect
 
     assert inspect.signature(wizard_worker._dev_host_cp).parameters["timeout_sec"].default == 480
     assert (
         inspect.signature(wizard_worker.PinnedCustomerHost.copy_file).parameters["timeout_sec"].default == 480
     )
-
-    rev = "a" * 40
-    monkeypatch.setattr(Path, "home", lambda: tmp_path)
-
-    def fake_run(cmd, *args, **kwargs):
-        if cmd[:2] == ["bash", "ops/environments/gateway/build.sh"]:
-            Path(cmd[4]).write_bytes(b"app-tar")
-        elif cmd[:2] == ["bash", "ops/environments/gateway/build-installer.sh"]:
-            Path(cmd[3]).write_bytes(b"inst-tar")
-        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-    monkeypatch.setattr(wizard_worker.subprocess, "run", fake_run)
-    monkeypatch.setattr(
-        wizard_worker,
-        "_dev_host_cp",
-        lambda *_a, **_kw: (_ for _ in ()).throw(wizard_worker.WizardWorkerError("DEV_HOST_CP_FAILED")),
-    )
-    with pytest.raises(wizard_worker.WizardWorkerError, match="DEV_HOST_CP_FAILED"):
-        wizard_worker._ensure_pool_artifacts(tmp_path, "41", revision=rev, python_minor="3.12")
-
-    cache_dir, app_cache, inst_cache = wizard_worker._local_pool_cache_paths(rev, "3.12")
-    assert cache_dir.is_dir()
-    assert app_cache.read_bytes() == b"app-tar"
-    assert inst_cache.read_bytes() == b"inst-tar"

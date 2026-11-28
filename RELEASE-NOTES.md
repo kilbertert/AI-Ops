@@ -15,6 +15,12 @@
 > 不事后补写（事后凭 commit 标题重构「用户感知」是编造），历史缺口原样保留。
 > 当前缺口：`1.29.0`–`1.40.0`（截至 2026-11-23）。
 
+## [1.43.23] - 2026-11-28
+
+### Changed
+- 收敛简化 OCI 发版实现（ADR-0363）：抽取单一发布脚本 `ops/environments/gateway/publish-release-image.sh` 与独立可单测宿主执行器 `ops/environments/gateway/host_release_agent.py`，将 Day-2 升级/回滚拆至 `release_worker.py`。
+- 客户机 `systemd` 单元改为 `EnvironmentFile` 直接拉起容器（去掉 `run-container.sh` 壳脚本与 `image-catalog.json` 叠加层），并正式退役历史 `venv` 跨海 24 MiB 整包升级与回滚路径，全面收敛为公司 ACR 单一不可变 `@sha256` 轨道。
+
 ## [1.43.22] - 2026-11-28
 
 ### Changed

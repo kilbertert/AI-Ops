@@ -28,7 +28,7 @@ type ReleaseCatalogEntry = {
   image_repo?: string
   image_tag?: string
   image_ready?: boolean
-  distribution_mode?: 'oci' | 'legacy_tarball'
+  distribution_mode?: 'oci' | 'unbuilt'
 }
 
 type RollbackTarget = {
@@ -697,7 +697,7 @@ export default function EnvironmentReleasesPanel({
                                       </span>
                                     ) : (
                                       <span className="rounded-full bg-background-section-burn px-1.5 py-0.5 text-[10px] font-medium text-text-tertiary">
-                                        离线包兜底
+                                        待构建镜像
                                       </span>
                                     )}
                                   </div>
@@ -823,11 +823,15 @@ export default function EnvironmentReleasesPanel({
                 <Button
                   type="button"
                   variant="primary"
-                  disabled={busy || !selectedRelease || sameAsCurrent}
+                  disabled={busy || !selectedRelease || !selectedRelease.image_ready || sameAsCurrent}
                   onClick={() => setConfirmUpgrade(true)}
                 >
                   <span aria-hidden="true" className="mr-1.5 i-ri-rocket-2-line size-4" />
-                  {sameAsCurrent ? '当前已是该版本' : '一键无损滚动升级'}
+                  {sameAsCurrent
+                    ? '当前已是该版本'
+                    : !selectedRelease?.image_ready
+                      ? '该版本尚未发布 OCI 镜像'
+                      : '一键无损滚动升级'}
                 </Button>
               </div>
             ) : (

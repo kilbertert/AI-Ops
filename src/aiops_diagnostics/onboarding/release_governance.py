@@ -134,7 +134,7 @@ def save_release_catalog(assets_dir: Path, entries: list[dict[str, Any]]) -> dic
             clean["image_repo"] = ""
             clean["image_tag"] = ""
             clean["image_ready"] = False
-            clean["distribution_mode"] = "legacy_tarball"
+            clean["distribution_mode"] = "unbuilt"
         sanitized.append(clean)
 
     ensure_private_directory(assets_dir)
@@ -318,7 +318,7 @@ def collect_git_annotated_releases(
                 "image_repo": clean_img["image_repo"] if clean_img else "",
                 "image_tag": clean_img["image_tag"] if clean_img else "",
                 "image_ready": bool(clean_img),
-                "distribution_mode": "oci" if clean_img else "legacy_tarball",
+                "distribution_mode": "oci" if clean_img else "unbuilt",
             }
         )
         if len(releases) >= limit:
@@ -355,18 +355,7 @@ def build_release_overview(
     states_doc = load_environment_release_states(resolved_assets)
     env_state = dict(states_doc.get("environments", {}).get(env) or {})
 
-    pool_summary = {"count": 0, "entries": []}
-    pool_file = _pool_path(registry_path, resolved_assets)
-    if pool_file.is_file():
-        try:
-            pool_summary = artifact_pool.list_pool_status(pool_file)
-        except Exception:
-            pool_summary = {"count": 0, "entries": []}
-
     pool_by_rev: dict[str, set[str]] = {}
-    for item in pool_summary.get("entries") or []:
-        if isinstance(item, dict) and item.get("revision") and item.get("python_minor"):
-            pool_by_rev.setdefault(str(item["revision"]), set()).add(str(item["python_minor"]))
 
     enrolled = False
     if identity is not None:
@@ -420,7 +409,7 @@ def build_release_overview(
                 "image_repo": str(entry.get("image_repo") or "") if img_ready else "",
                 "image_tag": str(entry.get("image_tag") or "") if img_ready else "",
                 "image_ready": img_ready,
-                "distribution_mode": "oci" if img_ready else "legacy_tarball",
+                "distribution_mode": "oci" if img_ready else "unbuilt",
             }
         )
 
@@ -444,7 +433,7 @@ def build_release_overview(
         "current_revision": current_revision,
         "python_minor": str(env_state.get("python_minor") or ""),
         "runtime_mode": str(
-            env_state.get("runtime_mode") or ("venv" if current_version and not is_control else "")
+            env_state.get("runtime_mode") or ("docker" if current_version and not is_control else "")
         ),
         "current_image_digest": str(env_state.get("current_image_digest") or ""),
         "current_image_ref": str(env_state.get("current_image_ref") or ""),
