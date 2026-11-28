@@ -1,5 +1,7 @@
 # Dify 控制台里的「发布到 AI-Ops」按钮（#577 的最后一跳）
 
+> **标准 ACR 发布与 36 总览**：本服务现已收敛至 `aiops-dify-edge` OCI 镜像（与登录代理共享构建镜像、双容器隔离运行，见 [`deploy/dify-36/ARCHITECTURE.md`](../../deploy/dify-36/ARCHITECTURE.md) 与 ADR-0367）；以下 `build-bundle.sh` / `deploy.sh` 为兼容保留的历史 tar 回滚细节。
+
 受限Dify服务API入口、正式用途及合并制品安装与恢复见[操作手册](../../docs/agents/shared-dify-https-fallback.md)。
 它不提供控制台或内部管理服务；是否已部署以交付回执为准。
 

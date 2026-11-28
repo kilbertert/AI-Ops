@@ -1,5 +1,7 @@
 # `aiops-inner-api-forward`（#889）
 
+> **36 宿主总览**：Dify 36 全体组件拓扑与分发规范见 [`deploy/dify-36/ARCHITECTURE.md`](../../deploy/dify-36/ARCHITECTURE.md)；本转发器因需访问宿主机 `/var/run/docker.sock` 执行 `docker inspect`，按 ADR-0367 保留为宿主机 systemd 服务。
+
 宿主回环上的一个转发器：`127.0.0.1:15001` → Dify `api` 容器的 `5001`。
 它让共享控制Gateway在自己的机器上调用Dify工作区、Console及Service API，
 并跑
