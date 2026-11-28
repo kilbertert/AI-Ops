@@ -1,5 +1,7 @@
 # Dify 登录代理（#772 B / #778）
 
+> **标准 ACR 发布与 36 总览**：本服务现已收敛至 `aiops-dify-edge` OCI 镜像（独立 `aiopslogin` 容器与数据卷，与发布桥严格隔离，见 [`deploy/dify-36/ARCHITECTURE.md`](../../deploy/dify-36/ARCHITECTURE.md) 与 ADR-0367）。
+
 **这是什么**：运营用**公司账号**进 Dify 控制台的那条路。用户输公司账号、密码与真实验证码，
 代理完成公司登录交换、读权限码，然后交给浏览器一枚 **Dify 控制台会话**。
 
