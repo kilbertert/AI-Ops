@@ -105,10 +105,15 @@ def all_targets(settings):
     for profile in configured.values():
         validate_target(NodeTarget(app_id="profile", tenant_id="profile", **profile["target"]))
     by_id = {t.app_id: t for t in legacy}
-    # 受管目录里现在也有**客户端**行（`entry='consumer'`，没有 node profile）。
-    # 它们不是节点目标：拿空 profile_id 去查 profile 会 KeyError，而那会让**整个**目标
-    # 列表加载失败 —— 一个客户端应用顺手把管家端全部停掉。
+    # 受管目录里现在也有**客户端**行（`entry='consumer'`，没有 node profile）与
+    # **远端独立客户环境**行（ADR-0372，`environment != settings.execution_environment`）。
+    # 它们不是本机节点目标：拿空或远端 profile_id 去查本机 profile 会 KeyError，而那会让
+    # **整个**目标列表加载失败 —— 一个远端/客户端应用顺手把本机管家端全部停掉。
+    local_env = str(getattr(settings, "execution_environment", "") or "").strip()
     for row in SelfServiceStore(settings.database_file).apps(entry="operator"):
+        row_env = str(row.get("environment") or "").strip()
+        if row_env and local_env and row_env != local_env:
+            continue
         if not row["profile_id"]:
             continue
         t = NodeTarget(
