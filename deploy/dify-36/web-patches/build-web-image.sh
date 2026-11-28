@@ -60,6 +60,7 @@ check_sha web/app/components/apps/index.tsx f64172a2ce46876cc3e8769fe1dd06480ba9
 check_sha web/app/components/app/configuration/configuration-view/index.tsx 2596b65ca35888c96c59f100b35a260e82af248459247ea13392deb713a63317
 check_sha web/app/components/app/configuration/hooks/configuration-lifecycle/publish.ts cd670e51bea2a49799835e7c218e97dd1955d27bfcb50a27904371c683608c92
 check_sha web/app/components/main-nav/routes.ts d137e7b31ee0b294cf430c90f67015fc04d8dd7aa06dff2992dc1abc86393a1d
+check_sha web/app/components/main-nav/components/nav-link.tsx 5f2e369b8d17d945a5a130512f9702835535efcf8d44f0fb4d93f22c394248f8
 check_sha web/app/components/main-nav/__tests__/index.spec.tsx 5e67ebce8e696ab5572286a81187b9cf6034e286e3d5e9054fcafa30cc146d61
 
 check_sha web/service/base.ts 25dd121901ade01cc075640b635157b463733a587e4ea75ae1343b925ded388e
@@ -120,9 +121,6 @@ echo "ok: 补丁已落进源（全部标记都在）"
 cp "$VERSION_DIR/aiops-knowledge-open.tsx" "$WORK/web/app/components/aiops-knowledge-open.tsx"
 cp "$VERSION_DIR/aiops-liquid-glass.tsx" "$WORK/web/app/components/aiops-liquid-glass.tsx"
 cp "$VERSION_DIR/aiops-liquid-glass.css" "$WORK/web/app/styles/aiops-liquid-glass.css"
-cp "$VERSION_DIR/aiops-environments.tsx" "$WORK/web/app/components/aiops-environments.tsx"
-cp "$VERSION_DIR/aiops-environment-releases.tsx" "$WORK/web/app/components/aiops-environment-releases.tsx"
-cp "$VERSION_DIR/aiops-onboarding-wizard.tsx" "$WORK/web/app/components/aiops-onboarding-wizard.tsx"
 cp "$VERSION_DIR/aiops-management.tsx" "$WORK/web/app/components/aiops-management.tsx"
 cp "$VERSION_DIR/aiops-management.ts" "$WORK/web/service/aiops-management.ts"
 cp "$VERSION_DIR/aiops-workflow-managed.tsx" "$WORK/web/app/components/aiops-workflow-managed.tsx"

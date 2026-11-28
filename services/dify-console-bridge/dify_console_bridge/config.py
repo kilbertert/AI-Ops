@@ -53,6 +53,9 @@ TRIAL_TERMINAL_STATUSES: frozenset[str] = DIAGNOSIS_PROFILE.terminal
 _PUBLISH_CHECK_PATH = "/__aiops/publish/check"
 _KNOWLEDGE_OPEN_ROUTE = "/__aiops/knowledge-open"
 _KNOWLEDGE_SYNC_ROUTE = "/__aiops/knowledge-sync"
+_CONSOLE_ROUTES = frozenset({"/aiops", "/aiops/", "/aiops/environments", "/aiops/environments/"})
+_CONSOLE_ASSET_PREFIX = "/aiops/assets/"
+DEFAULT_CONSOLE_DIST_DIR = "/opt/aiops-edge/console-dist"
 
 _REFUSED_PUBLISH_PERMISSION = "公司账号没有发布到 AI-Ops 的权限，请联系公司管理员"
 _REFUSED_NO_WORKSPACE = "你所在的租户还没有可用的 Dify 工作区，不能发布。请联系管理员为该租户开户后再试"
@@ -242,6 +245,7 @@ class BridgeSettings:
     login_proxy_url: str = ""
     timeout: float = 15.0
     environment_credentials_file: str = ""
+    console_dist_dir: str = DEFAULT_CONSOLE_DIST_DIR
 
     def __post_init__(self) -> None:
         if normalize_origin(self.console_origin) != self.console_origin:
@@ -291,5 +295,9 @@ class BridgeSettings:
             login_proxy_url=os.environ.get("AIOPS_CONSOLE_BRIDGE_LOGIN_PROXY_URL", "").strip().rstrip("/"),
             environment_credentials_file=os.environ.get(
                 "AIOPS_CONSOLE_BRIDGE_ENVIRONMENT_CREDENTIALS_FILE", ""
+            ),
+            console_dist_dir=(
+                os.environ.get("AIOPS_CONSOLE_BRIDGE_CONSOLE_DIST_DIR", DEFAULT_CONSOLE_DIST_DIR).strip()
+                or DEFAULT_CONSOLE_DIST_DIR
             ),
         )

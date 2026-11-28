@@ -1,6 +1,15 @@
-# AI-Ops Dify 36 宿主双侧边车共享 OCI 运行镜像（ADR-0367）
-# 同一份只读镜像在 36 上拆成两个严格隔离的容器运行：
-#   - aiops-dify-console-bridge (aiopsbridge / 127.0.0.1:10118)
+# AI-Ops Dify 36 宿主双侧边车与独立管理台共享 OCI 构建（ADR-0367 / ADR-0368）
+# Stage 1: 构建独立管理工作台（Vite + React 19 + Tailwind v4）
+FROM node:22-slim AS console-builder
+
+WORKDIR /build
+COPY services/aiops-console/package.json services/aiops-console/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY services/aiops-console/ ./
+RUN npm run typecheck && npm run build
+
+# Stage 2: 同一份只读镜像在 36 上拆成两个严格隔离的容器运行：
+#   - aiops-dify-console-bridge (aiopsbridge / 127.0.0.1:10118，兼提供 /aiops/* 静态入口)
 #   - aiops-dify-login-proxy    (aiopslogin  / 127.0.0.1:10119)
 FROM python:3.12-slim
 
@@ -8,7 +17,7 @@ ARG AIOPS_EDGE_VERSION=dev
 ARG AIOPS_EDGE_REVISION=unknown
 
 LABEL org.opencontainers.image.title="aiops-dify-edge" \
-      org.opencontainers.image.description="AI-Ops Dify console-bridge & login-proxy unified read-only OCI image" \
+      org.opencontainers.image.description="AI-Ops Dify console-bridge, login-proxy & standalone admin console OCI image" \
       org.opencontainers.image.version="${AIOPS_EDGE_VERSION}" \
       org.opencontainers.image.revision="${AIOPS_EDGE_REVISION}"
 
@@ -26,13 +35,16 @@ COPY src/aiops_diagnostics/gateway /opt/aiops-edge/aiops_diagnostics/gateway
 COPY src/aiops_diagnostics/identity /opt/aiops-edge/aiops_diagnostics/identity
 COPY src/aiops_diagnostics/onboarding /opt/aiops-edge/aiops_diagnostics/onboarding
 
+# 独立管理台静态产物（ADR-0368）
+COPY --from=console-builder /build/dist /opt/aiops-edge/console-dist
+
 # 登录页与宿主 Nginx 配置基准作为静态资产随版本同框归档（宿主按需比对/更新）
 COPY ops/dify-login-proxy/dify-login-page.html /opt/aiops-edge/assets/dify-login-page.html
 COPY ops/dify-console-bridge/dify-console-10008.conf /opt/aiops-edge/assets/dify-console-10008.conf
 COPY ops/dify-console-bridge/dify-console-publish.conf /opt/aiops-edge/assets/dify-console-publish.conf
 COPY ops/dify-login-proxy/dify-login-proxy.conf /opt/aiops-edge/assets/dify-login-proxy.conf
 
-# 容器运行时降权至 aiopsbridge / aiopslogin 只读运行，必须确保代码与资产对非 root 可读
+# 容器运行时降权至 aiopsbridge / aiopslogin 只读运行，必须确保代码与静态资产对非 root 可读
 RUN chmod -R a+rX /opt/aiops-edge
 
 ENV PYTHONPATH=/opt/aiops-edge \

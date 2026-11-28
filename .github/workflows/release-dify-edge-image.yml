@@ -9,6 +9,7 @@ on:
       - main
     paths:
       - "deploy/dify-36/edge/**"
+      - "services/aiops-console/**"
       - "services/dify-console-bridge/**"
       - "services/dify-login-proxy/**"
       - "src/aiops_diagnostics/__init__.py"

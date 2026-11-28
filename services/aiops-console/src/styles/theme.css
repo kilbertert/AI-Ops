@@ -1,0 +1,146 @@
+@import "tailwindcss";
+@import "./liquid-glass.css";
+
+@theme {
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", "Noto Sans", Arial,
+    sans-serif;
+
+  --color-text-primary: #101828;
+  --color-text-secondary: #354052;
+  --color-text-tertiary: #676f83;
+  --color-text-quaternary: rgb(16 24 40 / 0.3);
+  --color-text-primary-on-surface: #ffffff;
+  --color-text-destructive: #d92d20;
+  --color-text-success: #079455;
+  --color-text-warning: #dc6803;
+  --color-text-accent: #0033ff;
+
+  --color-background-body: #f2f4f7;
+  --color-background-section-burn: #f2f4f7;
+
+  --color-state-base-hover: rgb(200 206 218 / 0.2);
+  --color-state-accent-hover: #e9f0ff;
+  --color-state-accent-active: rgb(0 51 255 / 0.08);
+  --color-state-accent-solid: #0033ff;
+  --color-state-destructive-hover: #fef3f2;
+  --color-state-destructive-solid: #f04438;
+  --color-state-destructive-border: #fda29b;
+  --color-state-success-hover: #ecfdf3;
+  --color-state-success-active: #abefc6;
+  --color-state-success-solid: #17b26a;
+  --color-state-warning-hover: #fffaeb;
+  --color-state-warning-active: #fedf89;
+  --color-state-warning-solid: #f79009;
+
+  --color-components-panel-bg: #ffffff;
+  --color-components-panel-bg-alt: #f9fafb;
+  --color-components-panel-border: rgb(16 24 40 / 0.08);
+  --color-components-panel-gradient-1: #ffffff;
+  --color-components-panel-on-panel-item-bg-hover: #f9fafb;
+  --color-components-card-bg: #fcfcfd;
+  --color-components-input-bg-normal: rgb(200 206 218 / 0.25);
+  --color-components-input-border-hover: #d0d5dc;
+  --color-components-input-border-active: #d0d5dc;
+  --color-components-progress-bar-bg: rgb(0 51 255 / 0.04);
+
+  --color-components-button-ghost-bg-hover: rgb(200 206 218 / 0.2);
+  --color-components-button-secondary-bg: #ffffff;
+  --color-components-button-secondary-bg-hover: #f9fafb;
+  --color-components-button-secondary-border: rgb(16 24 40 / 0.14);
+  --color-components-button-secondary-text: #354052;
+  --color-components-button-primary-bg: #0033ff;
+  --color-components-button-primary-bg-hover: #002cde;
+  --color-components-button-primary-text: #ffffff;
+
+  --color-components-badge-bg-green-soft: rgb(23 178 106 / 0.08);
+  --color-components-badge-bg-orange-soft: rgb(247 144 9 / 0.08);
+  --color-components-badge-bg-red-soft: rgb(240 68 56 / 0.08);
+  --color-components-badge-bg-blue-light-soft: rgb(11 165 236 / 0.08);
+  --color-components-badge-bg-gray-soft: rgb(16 24 40 / 0.04);
+
+  --color-components-icon-bg-green-soft: #f3fee7;
+  --color-components-icon-bg-orange-soft: #fffaeb;
+  --color-components-icon-bg-blue-soft: #e9f0ff;
+  --color-components-icon-bg-indigo-soft: #eef4ff;
+
+  --color-divider-subtle: rgb(16 24 40 / 0.04);
+  --color-divider-regular: rgb(16 24 40 / 0.08);
+  --color-divider-deep: rgb(16 24 40 / 0.14);
+  --color-divider-accent: #e5eaff;
+}
+
+@utility system-xs-regular {
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 16px;
+}
+
+@utility system-xs-medium {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+}
+
+@utility system-xs-semibold {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+}
+
+@utility system-sm-regular {
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 16px;
+}
+
+@utility system-sm-medium {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 16px;
+}
+
+@utility system-sm-semibold {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 16px;
+}
+
+@utility system-md-regular {
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 20px;
+}
+
+@utility system-md-medium {
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+@utility system-md-semibold {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+@utility system-lg-semibold {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 22px;
+}
+
+@utility system-xl-semibold {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 24px;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-sans);
+  color: var(--color-text-primary);
+  background-color: var(--color-background-body);
+}

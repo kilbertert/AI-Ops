@@ -1,0 +1,217 @@
+export type EntryKey = 'consumer' | 'operator'
+
+export const entryLabels: Record<EntryKey, string> = {
+  consumer: '客户端客服',
+  operator: '管家',
+}
+
+export const messages: Record<string, string> = {
+  ENVIRONMENT_VALIDATION_CASE_INVALID: '请选择有效业务范围并填写受控验收案例编号',
+  ENVIRONMENT_VALIDATION_UPGRADE_REQUIRED: '请先将目标升级到 1.36.0 或更高版本后再验证业务',
+  ENVIRONMENT_REGISTRATION_UPGRADE_REQUIRED: '目标需先升级到 1.35.0 或更高版本，再登记已安装候选',
+  ENVIRONMENT_INSTALLATION_CONFIG_REQUIRED: '候选安装执行尚未配置，原候选准备仍可用',
+  ENVIRONMENT_INSTALLATION_OBSERVATION_REQUIRED: '请重新观察目标安装状态后再提交',
+  ENVIRONMENT_INSTALLATION_RECOVERY_REQUIRED: '安装结果尚待核对，请由运维恢复原任务；不要重复安装',
+  ENVIRONMENT_TASK_WORKER_UNAVAILABLE: '现场预检执行端尚未配置；原草稿与文件预检仍可使用',
+  ENVIRONMENT_WORKSPACE_CONFIG_REQUIRED: '共享工作区连接尚未配置，暂不能准备候选工作区',
+  ENVIRONMENT_TASK_OBSERVATION_REQUIRED: '请先完成同一有效计划的现场预检',
+  ENVIRONMENT_TASK_TENANT_INVALID: '租户未登记在当前环境草稿，请核对编号',
+  SETUP_KNOWLEDGE_SCOPE_MISMATCH: '已有知识账户不属于该环境，需核对后再准备',
+  SETUP_KNOWLEDGE_AMBIGUOUS: '候选知识库不唯一，请联系管理员核对，不重复创建',
+  ENVIRONMENT_TASK_UNAVAILABLE: '现场预检任务不可用或当前账号无权访问，请刷新核对',
+  ENVIRONMENT_TASK_PLAN_BLOCKED: '文件或配置预检尚未通过，不能发起现场任务',
+  ENVIRONMENT_TASK_PLAN_EXPIRED: '冻结计划已过期或输入改变，请重新预检',
+  ENVIRONMENT_TASK_TARGET_UNCONFIRMED: '远端结果尚未确认，请核对原任务；不要重复安装或开户',
+  ENVIRONMENT_WIZARD_INVALID: '向导参数无效，请核对填写内容后重试',
+  ENVIRONMENT_WIZARD_ACTION_UNSUPPORTED: '当前服务端尚未启用该向导动作，请先升级控制面版本',
+  ENVIRONMENT_WIZARD_UNAVAILABLE: '自助开通向导服务暂时不可用，请稍后重试',
+  ENVIRONMENT_ACCESS_DENIED: '当前账号无权操作该客户环境',
+  ENVIRONMENT_HOST_FINGERPRINT_MISMATCH: '目标主机 SSH 指纹与已钉扎记录不一致，已安全拒绝连接',
+  ENVIRONMENT_HOST_PASSWORD_AUTH_OR_BOOTSTRAP_FAILED: '一次性 SSH 口令认证或宿主机自举失败，请核对凭据与网络连通',
+  ENVIRONMENT_HOST_UNREACHABLE: '目标主机 SSH 不可达，请核对公网 IP、端口及防火墙策略',
+  ENVIRONMENT_BOOTSTRAP_TOKEN_EXPIRED_OR_USED: '一次性引导令牌已过期或已使用，请重新生成引导命令',
+  ENVIRONMENT_DB_REMEDIATION_CONFIRMATION_REQUIRED: '执行受限库修复前必须完成运维二次确认',
+  ENVIRONMENT_DB_REMEDIATION_DIGEST_MISMATCH: '待执行 SQL 与体检摘要不一致，请重新探测后再确认',
+  ENVIRONMENT_DB_REMEDIATION_SQL_FORBIDDEN: '仅允许执行最小只读授权与在线无锁建索引白名单 SQL',
+  ENVIRONMENT_ARTIFACT_NOT_FOUND: '控制面离线制品池中缺少匹配当前 Python 小版本的制品',
+  ENVIRONMENT_ARTIFACT_DIGEST_DRIFT: '离线制品磁盘摘要漂移，已拒绝使用',
+  ENVIRONMENT_KB_EXTENSION_UNSUPPORTED: '仅支持上传 .md / .txt / .docx / .pdf 格式文档',
+  ENVIRONMENT_KB_FILE_TOO_LARGE: '单个知识库文档不能超过 10 MiB',
+  ENVIRONMENT_KB_SERVICE_UNAVAILABLE: '知识库服务暂不可达，请稍后重试',
+  ENVIRONMENT_KB_UPLOAD_FAILED: '知识库文档上传失败，请核对格式后重试',
+  ENVIRONMENT_KB_PARSE_FAILED: '知识库文档切片解析失败，请稍后重试',
+  ENVIRONMENT_CONSUMER_LOGIN_FAILED: 'C 端测试手机号/验证码登录换取会话失败，请核对后重试',
+  ENVIRONMENT_WIZARD_JOB_NOT_FOUND: '未找到对应的异步开通任务，请重新触发',
+  ENVIRONMENT_WIZARD_SECRET_PERSISTENCE_FORBIDDEN: '安全拦截：敏感凭据严禁持久化至任务账本',
+  ENVIRONMENT_WIZARD_TENANT_REQUIRED: '请先确认目标租户编号后再执行开通或发布',
+  ENVIRONMENT_CONSUMER_SOURCE_UNAVAILABLE: '平台暂无可用正式 C 端模板应用，请先确认主环境来源发布',
+  ENVIRONMENT_SMOKE_INVALID: '公网终验参数无效，必须使用 HTTPS 客户 API 域名与有效租户编号',
+
+  ENVIRONMENT_DRAFT_REVISION_CONFLICT: '草稿已被其他管理员更新，请刷新后重新确认修改',
+  ENVIRONMENT_DRAFT_INVALID: '草稿格式无效，请核对编号、名称、地址和租户是否重复',
+  ENVIRONMENT_REFERENCE_INVALID: '部署目标与凭据须使用已登记的逻辑引用',
+  ENVIRONMENT_TIMEZONE_INVALID: '时区无效，请使用 Asia/Shanghai 等 IANA 时区名称',
+  ENVIRONMENT_DRAFT_UNAVAILABLE: '草稿服务暂时不可用，请稍后刷新核对',
+  ENVIRONMENT_OVERVIEW_UNAVAILABLE: '环境运行总览暂时不可用，请稍后刷新核对',
+  ENVIRONMENT_DRAFT_LIMIT: '草稿数量已达上限，请联系平台运维',
+  ENVIRONMENT_DRAFT_TOO_LARGE: '草稿内容过大，请减少本次登记的租户数量',
+  ENVIRONMENT_REGISTRY_MIGRATION_REQUIRED: '环境目录尚未升级，请联系平台运维迁移',
+  ENVIRONMENT_MANAGEMENT_UNAVAILABLE: '环境目录尚未准备，请联系平台运维',
+  ENVIRONMENT_MANAGEMENT_FORBIDDEN: '当前账号没有环境管理授权',
+  ENVIRONMENT_REGISTRY_REVISION_CONFLICT: '目录已被更新，请刷新后重新确认修改',
+  ENVIRONMENT_REGISTRY_UPDATE_REFUSED: '目录更新被拒绝，请核对名称或联系平台运维',
+  ENVIRONMENT_TENANT_NOT_REGISTERED: '该租户尚未登记到此环境',
+  SETUP_KEY_DIRECTORY_UNWRITABLE: '应用凭据存储不可写，请联系平台管理员修复后重试',
+  SETUP_KNOWLEDGE_FAILED: '知识库准备或模型校验失败，请重试；持续失败请联系平台管理员',
+  SETUP_KNOWLEDGE_REQUIRED: '请重试以补齐默认知识库空间',
+  SETUP_KNOWLEDGE_CONFIG_REQUIRED: '平台知识库连接未就绪，请联系平台管理员',
+  SETUP_KNOWLEDGE_BINDING_REQUIRED: '这一端的应用没有可绑定的对客知识库，请先在客户知识空间准备',
+  SETUP_KNOWLEDGE_CROSS_TENANT: '来源应用的知识库不属于目标客户，已拒绝复制',
+  SETUP_CONSUMER_CONTENT_REQUIRED: '来源客服编排不是动态知识回答，暂不能自动开通这一端',
+  SETUP_PLATFORM_PERMISSION_REQUIRED: '当前账号没有平台开通权限',
+  SETUP_TENANT_FORBIDDEN: '当前账号无权管理这个客户',
+  SETUP_TENANT_BUSY: '这个客户已有开通任务，请查看下方进度',
+  SETUP_SOURCE_REQUIRED: '请为选中的每一端选择来源正式版本',
+  SETUP_SOURCE_NOT_PUBLISHED: '所选来源还不是该端的正式版本，请刷新后重新选择',
+  SETUP_SOURCE_NOT_CONSUMER: '所选来源不是客户端客服编排，请换一份来源',
+  SETUP_DRAFT_CHANGED: '草稿已被修改，请刷新确认后重新发布',
+  SETUP_SOURCE_CHANGED: '来源正式版本已变化，请刷新后重新选择',
+  SETUP_ROUTE_CHANGED: '正式版本已变化，请刷新确认后重新发布',
+  SETUP_EXECUTOR_UNAVAILABLE: '执行组件尚未就绪，请稍后重试或联系平台管理员',
+  SETUP_EXECUTOR_INCOMPATIBLE: '执行组件版本不匹配，请联系平台管理员升级后再发布',
+  SETUP_KNOWLEDGE_CREATE_UNCONFIRMED: '知识库创建结果正在核对，请稍后重试；持续未确认请联系平台管理员',
+  SETUP_MODEL_CONNECTION_REQUIRED: '客户端所需模型尚未配置，请联系平台管理员',
+  SETUP_BUSINESS_CONNECTION_REQUIRED: '该客户的业务环境连接尚未配置，请联系平台管理员',
+  SETUP_BUSINESS_ENVIRONMENT_AMBIGUOUS: '平台登记了多个业务环境且未指定默认，请联系平台管理员在清单里指定后再开通',
+  SETUP_CONSUMER_PLUGIN_REQUIRED: '客户端知识连接尚未配置，请联系平台管理员',
+  SETUP_CONSUMER_PLUGIN_FAILED: '客户端知识连接校验失败，请重试或联系平台管理员',
+  SETUP_PROVIDER_OUTDATED: '管家工具目录与系统冲突，请联系平台管理员核对；未覆盖现有工具',
+  DIFY_PLUGIN_VERSION_CONFLICT: '客户空间已有其他插件版本，请联系平台管理员完成兼容升级后重试',
+  DIFY_PLUGIN_PACKAGE_MISSING: '平台缺少来源版本所需的插件包，请联系平台管理员补齐后重试',
+  DIFY_PLUGIN_INSTALL_INCOMPLETE: '所需插件版本尚未就绪，请重试；持续失败请联系平台管理员',
+  DIFY_PLUGIN_INSTALL_FAILED: '平台安装依赖插件失败，请联系平台管理员检查插件包后重试',
+  DIFY_PLUGIN_INSTALL_TIMEOUT: '插件安装尚未完成，请稍后重试',
+  DIFY_CONSOLE_UNREACHABLE: '编排服务暂时不可达，请稍后重试',
+  DIFY_CREDENTIAL_INVALID: '模型或工具连接凭据校验失败，请联系平台管理员',
+  SETUP_MODEL_CONFLICT: '模型配置与平台模板不一致，请联系平台管理员',
+  SETUP_IMPORT_UPGRADE_REQUIRED: '平台导入服务尚未升级，请联系平台管理员',
+  SETUP_KEY_LIMIT: '该应用的 Service 凭据已达上限，请联系平台管理员清理',
+  SETUP_KEY_AMBIGUOUS: 'Service 凭据归属不明，已停止切换正式版本，请联系平台管理员',
+  SETUP_KEY_DIRECTORY_REQUIRED: '平台未配置凭据目录，请联系平台管理员',
+  SETUP_AGENT_UNAVAILABLE: '这一端的智能体还不存在，请联系平台管理员',
+  SETUP_PARTIAL: '部分完成：失败的一端可单独重试，已完成的一端不会被重建',
+  SETUP_STEP_FAILED: '当前步骤未完成，可以重试；持续失败请联系平台管理员',
+  OPERATOR_SITE_SCOPE_REQUIRED: '当前账号未分配可诊断场站，请联系公司管理员分配或切换账号',
+  OPERATOR_TRIAL_LOGIN_REQUIRED: '公司登录已过期，请重新登录后继续',
+  SETUP_APP_NOT_MANAGED: '该应用不在受管应用登记中，请核对应用归属或联系平台管理员',
+  SETUP_APP_CONFLICT: '该应用的登记身份与既有记录冲突（归属或端不一致），请核对应用登记或联系平台管理员',
+  SETUP_ACTOR_CHANGED: '开通任务信息已变化，请刷新后重试',
+  SETUP_BUSY: '有任务正在执行，请稍后重试',
+  SETUP_CHANNEL_DECLARATION_INVALID: '渠道接入声明无效，请联系平台管理员核对清单',
+  SETUP_CREDENTIAL_REQUIRED: '发布服务凭据未配置，请联系平台管理员',
+  SETUP_DISABLED: '自助管理未启用，请联系平台管理员',
+  SETUP_ENTRY_UNKNOWN: '应用入口类型无法识别，请联系平台管理员',
+  SETUP_SCOPE_UNKNOWN: '开通范围无法识别，请联系平台管理员',
+  SETUP_IDENTITY_MISMATCH: '公司身份与应用账号不匹配，请重新登录或联系平台管理员',
+  SETUP_IMPORT_PENDING: '应用导入尚未完成，请稍后重试',
+  SETUP_JOB_MISSING: '开通任务记录缺失，请联系平台管理员',
+  SETUP_KEY_LIST_UNAVAILABLE: '应用凭据清单读取失败，请稍后重试或联系平台管理员',
+  SETUP_KEY_UNAVAILABLE: '应用凭据不可用，请联系平台管理员',
+  SETUP_KNOWLEDGE_CONNECTION_FAILED: '知识库连接校验失败，请重试或联系平台管理员',
+  SETUP_KNOWLEDGE_NOT_SUPPORTED: '该应用含有暂不支持的知识库声明，请联系平台管理员',
+  SETUP_LEASE_LOST: '任务执行权已失效，请重试',
+  SETUP_OPERATION_NOT_FOUND: '开通任务不存在或不属于当前账号',
+  SETUP_PROVIDER_UNAVAILABLE: '工具目录暂时不可用，请稍后重试',
+  SETUP_REQUEST_CHANGED: '开通请求已变化，请重新发起',
+  SETUP_SOURCE_NOT_AVAILABLE: '该端没有可用的来源应用，请先完成来源发布',
+  SETUP_VERSION_MISMATCH: '所选版本不属于该应用，请刷新后重试',
+  SETUP_WORKSPACE_PENDING: '工作区尚未就绪，请稍后重试',
+  SETUP_UNAVAILABLE: '管理服务暂时不可用，请稍后重试',
+  COMPANY_DIRECTORY_UNAVAILABLE: '公司目录服务暂时不可用，请稍后重试',
+  ROUTE_BINDING_RETRACTED: '该版本已撤回；要重新上线请用「恢复历史版本」',
+  ROUTE_BINDING_CONFLICT: '正式版本在页面打开后已变化，请刷新后重试',
+  ROUTE_BINDING_MISSING: '正式版本指针缺失，请联系平台管理员',
+  ROUTE_BINDING_UNAVAILABLE: '正式版本指针暂时不可用，请稍后重试',
+  ROUTE_ENGINE_UNKNOWN: '路由执行组件类型未知，请联系平台管理员',
+  CHAT_ROUTE_BINDING_COLLIDES_WITH_FILE: '该客户路由仍登记在配置文件中，请联系平台管理员核对',
+  DIFY_KEY_DIR_UNSET: '应用凭据目录未配置，请联系平台管理员',
+  DIFY_CHAT_BASE_URL_UNSET: '聊天执行地址未配置，请联系平台管理员',
+  DIFY_ROUTE_NOT_ADVANCED: '发布产物缺少可绑定的版本身份，请联系平台管理员',
+  'node route revision missing': '正式版本指针缺失，请联系平台管理员',
+  'node route revision changed': '正式版本已变化，请刷新后重新发布',
+  'node route retracted': '该版本已撤回；要重新上线请用「恢复历史版本」',
+  'node target environment changed': '执行目标环境已变化，请联系平台管理员',
+}
+
+export const steps: Record<string, string> = {
+  workspace: '准备工作区',
+  knowledge: '准备知识库空间',
+  dependencies: '配置模型和工具',
+  application: '创建智能体',
+  register: '登记应用',
+  publish: '开通',
+  'consumer:application': '准备客户端应用',
+  'consumer:source': '核对客户端来源',
+  'consumer:dependencies': '准备客户端依赖',
+  'consumer:knowledge': '分配客户知识库',
+  'consumer:key': '申请并保存凭据',
+  'consumer:register': '登记客户端应用',
+  'consumer:publish': '发布客户端客服',
+  'consumer:failed': '客户端未完成',
+  'operator:dependencies': '准备管家依赖',
+  'operator:application': '准备管家应用',
+  'operator:register': '登记管家应用',
+  'operator:publish': '发布管家',
+  'operator:failed': '管家未完成',
+  complete: '配置完成',
+}
+
+type ErrorBody = {
+  error?: { code?: unknown; message?: unknown } | null
+  error_code?: unknown
+  reason?: unknown
+  detail?: unknown
+}
+
+export function failureText(body: unknown, fallback = '管理操作未完成，请稍后重试'): string {
+  const data = (body ?? {}) as ErrorBody
+  const code = String(data.error?.code ?? data.error_code ?? '')
+  if (code && messages[code]) return messages[code]
+  const detail = [data.reason, data.error?.message, data.detail].find(
+    (v): v is string => typeof v === 'string' && v.trim().length > 0,
+  )
+  if (detail) return code ? `${detail}（${code}）` : detail
+  return code ? `${fallback}（${code}）` : fallback
+}
+
+export async function manage(action: string, payload: Record<string, unknown> = {}) {
+  const cookie = document.cookie
+    .split(';')
+    .map((x) => x.trim())
+    .find((x) => x.startsWith('__Host-csrf_token=') || x.startsWith('csrf_token='))
+  let response: Response
+  try {
+    response = await fetch('/__aiops/manage', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': cookie ? decodeURIComponent(cookie.slice(cookie.indexOf('=') + 1)) : '',
+      },
+      body: JSON.stringify({ action, ...payload }),
+    })
+  } catch (e) {
+    if (e instanceof TypeError) throw new Error('无法连接管理服务，请检查网络后重试')
+    throw e
+  }
+  if (response.status === 401 && typeof window !== 'undefined') {
+    const target = `${window.location.pathname}${window.location.search}`
+    window.location.assign(`/signin?redirect=${encodeURIComponent(target || '/aiops/environments')}`)
+  }
+  const body = await response.json().catch(() => null)
+  if (!response.ok) {
+    throw new Error(failureText(body, `管理操作未完成（${response.status}），请稍后重试`))
+  }
+  if (body === null || typeof body !== 'object') throw new Error('管理服务返回了无法解析的响应')
+  return body
+}

@@ -124,3 +124,7 @@ tools/experiments/m2_close/node/target/
 
 # 上游源码树：build-web-image.sh 拉下来的 Dify 全量源码（~200M），构建产物不是源。
 deploy/dify-36/web-patches/work/
+
+# 独立管理台（services/aiops-console）构建依赖与产物
+services/aiops-console/node_modules/
+services/aiops-console/dist/
