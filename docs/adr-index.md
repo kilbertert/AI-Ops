@@ -1,7 +1,7 @@
 # 现行架构决策索引（Active ADR Index）
 
 > **给新接手工程师的 1 分钟导读**：
-> - 本页列出主仓库 `docs/adr/` **当前生效的 126 份核心架构决策**（按领域归类）。想知道「系统为什么这样设计、哪些方案已被否决」，先看本页对应行再点进具体 ADR。
+> - 本页列出主仓库 `docs/adr/` **当前生效的 127 份核心架构决策**（按领域归类）。想知道「系统为什么这样设计、哪些方案已被否决」，先看本页对应行再点进具体 ADR。
 > - 已被取代、反转、撤回、到期，以及单一 PR / 局部 bugfix / 一次性清理的 **231 份历史与战术 ADR**，已依据 [ADR-0370](adr/0370-archive-superseded-and-tactical-adrs.md) 完整性校验后迁出至私有归档仓库 [`kilbertert/AI-Ops-history-archive`](https://github.com/kilbertert/AI-Ops-history-archive/tree/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr)（归档提交 `4bed22cb`）。
 > - 运行现状请读 [当前交付状态](agents/current-delivery-state.md)；Dify 宿主现状请直接看唯一架构入口 [`deploy/dify-36/ARCHITECTURE.md`](../deploy/dify-36/ARCHITECTURE.md)。
 
@@ -42,7 +42,7 @@
 | [ADR-0320](adr/0320-registry-entry-dispatches-caller-chains.md) | 登记表按申报入口分派本环境凭据链，operator 令牌走本环境 UPMS | 已采纳 |
 | [ADR-0332](adr/0332-platform-and-manager-admission-under-environment-registry.md) | 启用运行目录后的平台账号与目录管理员登录准入边界 | 已采纳 |
 
-## 二、Dify @ 36 架构与边缘侧边车（31 份）
+## 二、Dify @ 36 架构与边缘侧边车（32 份）
 
 | ADR | 生效核心规则 | 状态备注 |
 |---|---|---|
@@ -77,6 +77,7 @@
 | [ADR-0367](adr/0367-dify-edge-sidecars-acr-convergence.md) | 36 双侧边车收敛为单一共享 ACR 镜像 `aiops-dify-edge`（双容器 UID 隔离）与唯一架构入口 | 已采纳 |
 | [ADR-0368](adr/0368-decouple-aiops-admin-console-from-dify-web.md) | `/aiops/*` 独立管理工作台迁出 Dify Next.js 至 `services/aiops-console/`，由边缘桥同源托管 | 已采纳 |
 | [ADR-0369](adr/0369-retire-legacy-dify-edge-bundles-and-add-request-tracing.md) | 退役旧 `build-bundle.sh` / `deploy.sh` / systemd 资产，补全图标与 `X-Request-Id` 跨跳追踪 | 已采纳 |
+| [ADR-0372](adr/0372-single-control-plane-cross-env-dify-management-and-retire-legacy-tenant-setup.md) | 单控制面跨环境 Dify 提示词编辑/发布/回滚（41 经固定密钥 SSH 远端维护客户机 Gateway）并彻底退役旧版 `/apps` 顶部「复制并开通客户 AI 服务」 | 已采纳 |
 
 ## 三、Gateway、Schema、执行节点与电池健康（18 份）
 

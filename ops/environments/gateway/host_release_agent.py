@@ -9,15 +9,20 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
 import pwd
+import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import time
 import urllib.request
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -599,6 +604,469 @@ def cmd_cold_install(payload: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "version": ver, "health": health}
 
 
+_ENV_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,30}[a-z0-9])?$")
+_APP_ID_RE = re.compile(r"^[a-f0-9-]{36}$")
+_SCENARIO_BY_ENTRY = {
+    "operator": "operator_order_diagnosis",
+    "consumer": "consumer_service",
+}
+
+
+def _now_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _validate_env_name(env: str) -> str:
+    if not isinstance(env, str) or not _ENV_RE.fullmatch(env):
+        raise RuntimeError("INVALID_ENVIRONMENT")
+    return env
+
+
+def _drop_to_owner(target_path: Path) -> tuple[int, int]:
+    """写客户机 gateway.db 前降权到库文件真实属主 UID/GID，防止 root 遗留 WAL/SHM 破坏容器写权限。"""
+    probe = target_path if target_path.exists() else target_path.parent
+    st = probe.stat()
+    if os.geteuid() == 0 and st.st_uid != 0:
+        os.setgid(st.st_gid)
+        os.setuid(st.st_uid)
+    return st.st_uid, st.st_gid
+
+
+def _open_gateway_db(env: str) -> sqlite3.Connection:
+    db_path = _var_root(env) / "gateway" / "gateway.db"
+    if not db_path.is_file():
+        raise RuntimeError("GATEWAY_DB_MISSING")
+    _drop_to_owner(db_path)
+    conn = sqlite3.connect(str(db_path), timeout=15.0, isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 15000")
+    return conn
+
+
+def cmd_app_state(payload: dict[str, Any]) -> dict[str, Any]:
+    env = _validate_env_name(str(payload["environment"]))
+    tenant_id = str(payload["tenant_id"])
+    app_id = str(payload["app_id"])
+    entry = str(payload["entry"])
+    if entry not in _SCENARIO_BY_ENTRY or not _APP_ID_RE.fullmatch(app_id):
+        raise RuntimeError("INVALID_APP_QUERY")
+    scenario = _SCENARIO_BY_ENTRY[entry]
+    runtime_dir = _etc_root(env) / "runtime"
+    op_manifest = _read_json(runtime_dir / "operator-manifest.json") if entry == "operator" else {}
+    consumer_targets = _read_json(runtime_dir / "consumer-targets.json") if entry == "consumer" else {}
+
+    conn = _open_gateway_db(env)
+    try:
+        app_row = conn.execute("SELECT * FROM operator_apps WHERE app_id = ?", (app_id,)).fetchone()
+        route_row = conn.execute(
+            "SELECT * FROM chat_route_bindings "
+            "WHERE environment = ? AND tenant_id = ? AND entry = ? AND scenario = ?",
+            (env, tenant_id, entry, scenario),
+        ).fetchone()
+        snapshot: dict[str, Any] | None = None
+        if route_row is not None:
+            ver_row = conn.execute(
+                "SELECT snapshot_json FROM agent_versions "
+                "WHERE agent_id = ? AND tenant_id = ? AND version_no = ?",
+                (route_row["agent_id"], tenant_id, route_row["agent_version_no"]),
+            ).fetchone()
+            if ver_row is not None and ver_row["snapshot_json"]:
+                snapshot = json.loads(ver_row["snapshot_json"])
+        grant_rows = conn.execute(
+            "SELECT knowledge_base_id FROM consumer_knowledge_grants "
+            "WHERE tenant_id = ? AND environment = ? AND revoked_at IS NULL",
+            (tenant_id, env),
+        ).fetchall()
+        observed = False
+        try:
+            if entry == "operator":
+                hit = conn.execute(
+                    "SELECT 1 FROM agent_runs WHERE status = 'succeeded' AND scope_json LIKE ? LIMIT 1",
+                    (f'%"{tenant_id}"%',),
+                ).fetchone()
+            else:
+                hit = conn.execute(
+                    "SELECT 1 FROM chat_dify_runs WHERE tenant_id = ? AND status = 'succeeded' LIMIT 1",
+                    (tenant_id,),
+                ).fetchone()
+            observed = hit is not None
+        except sqlite3.OperationalError:
+            observed = False
+    finally:
+        conn.close()
+
+    return {
+        "ok": True,
+        "environment": env,
+        "app": dict(app_row) if app_row is not None else None,
+        "route": dict(route_row) if route_row is not None else None,
+        "snapshot": snapshot,
+        "granted_knowledge_base_ids": sorted(str(r["knowledge_base_id"]) for r in grant_rows),
+        "operator_manifest_template": op_manifest,
+        "consumer_targets": consumer_targets,
+        "channel_observed": observed,
+    }
+
+
+def cmd_app_publish(payload: dict[str, Any]) -> dict[str, Any]:
+    env = _validate_env_name(str(payload["environment"]))
+    tenant_id = str(payload["tenant_id"])
+    app_id = str(payload["app_id"])
+    workspace_id = str(payload["workspace_id"])
+    entry = str(payload["entry"])
+    agent_name = str(payload["agent_name"])
+    expected_revision = int(payload["expected_revision"])
+    actor = str(payload.get("actor") or "control-plane")
+    snapshot = payload["snapshot"]
+    workflow_id = str(payload.get("workflow_id") or "")
+    agent_config = payload.get("agent_config") or {}
+    key_content = str(payload.get("key_content") or "")
+    targets_json = str(payload.get("targets_json") or "{}")
+    if entry not in _SCENARIO_BY_ENTRY or not _APP_ID_RE.fullmatch(app_id) or not isinstance(snapshot, dict):
+        raise RuntimeError("INVALID_APP_PUBLISH")
+    scenario = _SCENARIO_BY_ENTRY[entry]
+    engine = "node" if entry == "operator" else "dify"
+    node_config_file = f"/etc/aiops-access-{env}/runtime/agent-runs.json" if entry == "operator" else ""
+    key_path = _var_root(env) / "keys" / f"{app_id}.key"
+    workflow_key_ref = str(key_path) if entry == "consumer" else ""
+
+    conn = _open_gateway_db(env)
+    try:
+        if key_content and entry == "consumer":
+            key_path.parent.mkdir(parents=True, exist_ok=True)
+            _write_atomic(key_path, key_content.strip() + "\n", 0o600)
+
+        now = _now_iso()
+        conn.execute("BEGIN IMMEDIATE")
+        route_row = conn.execute(
+            "SELECT * FROM chat_route_bindings "
+            "WHERE environment = ? AND tenant_id = ? AND entry = ? AND scenario = ?",
+            (env, tenant_id, entry, scenario),
+        ).fetchone()
+        current_rev = int(route_row["revision"]) if route_row is not None else 0
+        if current_rev != expected_revision:
+            conn.execute("ROLLBACK")
+            return {"ok": False, "conflict": "SETUP_ROUTE_CHANGED", "current_revision": current_rev}
+
+        agent_id = ""
+        if route_row is not None and route_row["app_id"] == app_id:
+            agent_id = str(route_row["agent_id"])
+        if not agent_id:
+            found_agent = conn.execute(
+                "SELECT agent_id FROM agents WHERE tenant_id = ? AND name = ? LIMIT 1",
+                (tenant_id, agent_name),
+            ).fetchone()
+            if found_agent is not None:
+                agent_id = str(found_agent["agent_id"])
+        if not agent_id:
+            agent_id = f"agt_{uuid.uuid4().hex}"
+            conn.execute(
+                "INSERT INTO agents "
+                "(agent_id, tenant_id, name, description, status, revision, config_json, "
+                "published_version, created_by, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, 'published', 1, ?, 0, ?, ?, ?)",
+                (
+                    agent_id,
+                    tenant_id,
+                    agent_name,
+                    f"Remote published {entry} agent",
+                    json.dumps(agent_config, ensure_ascii=False, sort_keys=True),
+                    actor,
+                    now,
+                    now,
+                ),
+            )
+
+        max_row = conn.execute(
+            "SELECT COALESCE(MAX(version_no), 0) AS max_v FROM agent_versions "
+            "WHERE agent_id = ? AND tenant_id = ?",
+            (agent_id, tenant_id),
+        ).fetchone()
+        next_ver = int(max_row["max_v"]) + 1
+        snap_payload = {
+            **snapshot,
+            "app_id": app_id,
+            "workspace_id": workspace_id,
+            "workflow_id": workflow_id,
+        }
+        conn.execute(
+            "INSERT INTO agent_versions "
+            "(agent_id, tenant_id, version_no, snapshot_json, published_by, published_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                agent_id,
+                tenant_id,
+                next_ver,
+                json.dumps(snap_payload, ensure_ascii=False, sort_keys=True),
+                actor,
+                now,
+            ),
+        )
+        conn.execute(
+            "UPDATE agents SET status = 'published', published_version = ?, revision = revision + 1, "
+            "config_json = ?, updated_at = ? WHERE agent_id = ? AND tenant_id = ?",
+            (
+                next_ver,
+                json.dumps(agent_config, ensure_ascii=False, sort_keys=True),
+                now,
+                agent_id,
+                tenant_id,
+            ),
+        )
+        new_rev = expected_revision + 1
+        if route_row is None:
+            conn.execute(
+                "INSERT INTO chat_route_bindings "
+                "(environment, tenant_id, entry, scenario, engine, agent_id, agent_version_no, "
+                "app_id, workflow_id, workflow_key_ref, state, revision, updated_by, updated_at, "
+                "node_config_file) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)",
+                (
+                    env,
+                    tenant_id,
+                    entry,
+                    scenario,
+                    engine,
+                    agent_id,
+                    next_ver,
+                    app_id,
+                    workflow_id,
+                    workflow_key_ref,
+                    new_rev,
+                    actor,
+                    now,
+                    node_config_file,
+                ),
+            )
+        else:
+            conn.execute(
+                "UPDATE chat_route_bindings "
+                "SET engine = ?, agent_id = ?, agent_version_no = ?, app_id = ?, workflow_id = ?, "
+                "workflow_key_ref = ?, state = 'active', revision = ?, updated_by = ?, updated_at = ?, "
+                "node_config_file = ? "
+                "WHERE environment = ? AND tenant_id = ? AND entry = ? AND scenario = ?",
+                (
+                    engine,
+                    agent_id,
+                    next_ver,
+                    app_id,
+                    workflow_id,
+                    workflow_key_ref,
+                    new_rev,
+                    actor,
+                    now,
+                    node_config_file,
+                    env,
+                    tenant_id,
+                    entry,
+                    scenario,
+                ),
+            )
+        conn.execute(
+            "INSERT INTO operator_apps "
+            "(app_id, tenant_id, workspace_id, agent_name, profile_id, created_by, revision, "
+            "entry, scenario, environment, targets_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?) "
+            "ON CONFLICT(app_id) DO UPDATE SET "
+            "workspace_id = excluded.workspace_id, agent_name = excluded.agent_name, "
+            "targets_json = excluded.targets_json, revision = operator_apps.revision + 1",
+            (
+                app_id,
+                tenant_id,
+                workspace_id,
+                agent_name,
+                f"operator-{env}" if entry == "operator" else "",
+                actor,
+                entry,
+                scenario,
+                env,
+                targets_json,
+            ),
+        )
+        conn.execute("COMMIT")
+        return {
+            "ok": True,
+            "version_no": next_ver,
+            "revision": new_rev,
+            "action": "published",
+            "app_id": app_id,
+            "agent_id": agent_id,
+        }
+    except Exception:
+        with contextlib.suppress(Exception):
+            conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+
+
+def cmd_app_versions(payload: dict[str, Any]) -> dict[str, Any]:
+    env = _validate_env_name(str(payload["environment"]))
+    tenant_id = str(payload["tenant_id"])
+    app_id = str(payload["app_id"])
+    entry = str(payload["entry"])
+    agent_name = str(payload.get("agent_name") or "")
+    if entry not in _SCENARIO_BY_ENTRY or not _APP_ID_RE.fullmatch(app_id):
+        raise RuntimeError("INVALID_APP_VERSIONS")
+    scenario = _SCENARIO_BY_ENTRY[entry]
+    conn = _open_gateway_db(env)
+    try:
+        route_row = conn.execute(
+            "SELECT agent_id FROM chat_route_bindings "
+            "WHERE environment = ? AND tenant_id = ? AND entry = ? AND scenario = ? AND app_id = ?",
+            (env, tenant_id, entry, scenario, app_id),
+        ).fetchone()
+        agent_id = str(route_row["agent_id"]) if route_row is not None else ""
+        if not agent_id and agent_name:
+            found = conn.execute(
+                "SELECT agent_id FROM agents WHERE tenant_id = ? AND name = ? LIMIT 1",
+                (tenant_id, agent_name),
+            ).fetchone()
+            if found is not None:
+                agent_id = str(found["agent_id"])
+        if not agent_id:
+            return {"ok": True, "versions": []}
+        rows = conn.execute(
+            "SELECT version_no, snapshot_json FROM agent_versions "
+            "WHERE agent_id = ? AND tenant_id = ? ORDER BY version_no DESC",
+            (agent_id, tenant_id),
+        ).fetchall()
+        versions = [
+            int(r["version_no"])
+            for r in rows
+            if r["snapshot_json"] and json.loads(r["snapshot_json"]).get("app_id") == app_id
+        ]
+        return {"ok": True, "versions": versions}
+    finally:
+        conn.close()
+
+
+def cmd_app_change_version(payload: dict[str, Any]) -> dict[str, Any]:
+    env = _validate_env_name(str(payload["environment"]))
+    tenant_id = str(payload["tenant_id"])
+    app_id = str(payload["app_id"])
+    workspace_id = str(payload["workspace_id"])
+    entry = str(payload["entry"])
+    expected_revision = int(payload["expected_revision"])
+    version_no = payload.get("version_no")
+    actor = str(payload.get("actor") or "control-plane")
+    if entry not in _SCENARIO_BY_ENTRY or not _APP_ID_RE.fullmatch(app_id):
+        raise RuntimeError("INVALID_APP_VERSION_CHANGE")
+    scenario = _SCENARIO_BY_ENTRY[entry]
+
+    conn = _open_gateway_db(env)
+    try:
+        now = _now_iso()
+        conn.execute("BEGIN IMMEDIATE")
+        route_row = conn.execute(
+            "SELECT * FROM chat_route_bindings "
+            "WHERE environment = ? AND tenant_id = ? AND entry = ? AND scenario = ?",
+            (env, tenant_id, entry, scenario),
+        ).fetchone()
+        if (
+            route_row is None
+            or str(route_row["app_id"]) != app_id
+            or int(route_row["revision"]) != expected_revision
+        ):
+            conn.execute("ROLLBACK")
+            return {"ok": False, "conflict": "SETUP_ROUTE_CHANGED"}
+
+        new_rev = expected_revision + 1
+        if version_no is None:
+            conn.execute(
+                "UPDATE chat_route_bindings "
+                "SET state = 'retracted', revision = ?, updated_by = ?, updated_at = ? "
+                "WHERE environment = ? AND tenant_id = ? AND entry = ? AND scenario = ?",
+                (new_rev, actor, now, env, tenant_id, entry, scenario),
+            )
+            conn.execute("COMMIT")
+            return {
+                "ok": True,
+                "app_id": app_id,
+                "entry": entry,
+                "revision": new_rev,
+                "state": "retracted",
+                "action": "retracted",
+                "version_no": int(route_row["agent_version_no"]),
+            }
+
+        target_ver = int(version_no)
+        ver_row = conn.execute(
+            "SELECT snapshot_json FROM agent_versions "
+            "WHERE agent_id = ? AND tenant_id = ? AND version_no = ?",
+            (route_row["agent_id"], tenant_id, target_ver),
+        ).fetchone()
+        if ver_row is None or not ver_row["snapshot_json"]:
+            conn.execute("ROLLBACK")
+            return {"ok": False, "refused": "SETUP_VERSION_MISMATCH"}
+        snap = json.loads(ver_row["snapshot_json"])
+        if snap.get("app_id") != app_id or (
+            snap.get("workspace_id") and snap.get("workspace_id") != workspace_id
+        ):
+            conn.execute("ROLLBACK")
+            return {"ok": False, "refused": "SETUP_VERSION_MISMATCH"}
+        workflow_id = str(snap.get("workflow_id") or route_row["workflow_id"] or "")
+        conn.execute(
+            "UPDATE chat_route_bindings "
+            "SET state = 'active', agent_version_no = ?, workflow_id = ?, revision = ?, "
+            "updated_by = ?, updated_at = ? "
+            "WHERE environment = ? AND tenant_id = ? AND entry = ? AND scenario = ?",
+            (target_ver, workflow_id, new_rev, actor, now, env, tenant_id, entry, scenario),
+        )
+        conn.execute("COMMIT")
+        return {
+            "ok": True,
+            "app_id": app_id,
+            "entry": entry,
+            "revision": new_rev,
+            "state": "active",
+            "action": "restored",
+            "version_no": target_ver,
+        }
+    except Exception:
+        with contextlib.suppress(Exception):
+            conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+
+
+def cmd_app_knowledge_grant(payload: dict[str, Any]) -> dict[str, Any]:
+    env = _validate_env_name(str(payload["environment"]))
+    tenant_id = str(payload["tenant_id"])
+    kb_id = str(payload["knowledge_base_id"])
+    allowed = bool(payload["allowed"])
+    actor = str(payload.get("actor") or "control-plane")
+    conn = _open_gateway_db(env)
+    try:
+        now = time.time()
+        conn.execute("BEGIN IMMEDIATE")
+        if allowed:
+            conn.execute(
+                "INSERT INTO consumer_knowledge_grants "
+                "(tenant_id, environment, knowledge_base_id, granted_by, granted_at, revoked_at) "
+                "VALUES (?, ?, ?, ?, ?, NULL) "
+                "ON CONFLICT(tenant_id, environment, knowledge_base_id) "
+                "DO UPDATE SET granted_by = excluded.granted_by, "
+                "granted_at = excluded.granted_at, revoked_at = NULL",
+                (tenant_id, env, kb_id, actor, now),
+            )
+        else:
+            conn.execute(
+                "UPDATE consumer_knowledge_grants SET revoked_at = ? "
+                "WHERE tenant_id = ? AND environment = ? AND knowledge_base_id = ?",
+                (now, tenant_id, env, kb_id),
+            )
+        conn.execute("COMMIT")
+        return {"ok": True, "id": kb_id, "allowed": allowed}
+    except Exception:
+        with contextlib.suppress(Exception):
+            conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+
+
 _COMMANDS = {
     "probe": cmd_probe,
     "pull-verify": cmd_pull_verify,
@@ -606,6 +1074,11 @@ _COMMANDS = {
     "switch": cmd_switch,
     "rollback": cmd_rollback,
     "cold-install": cmd_cold_install,
+    "app-state": cmd_app_state,
+    "app-publish": cmd_app_publish,
+    "app-versions": cmd_app_versions,
+    "app-change-version": cmd_app_change_version,
+    "app-knowledge-grant": cmd_app_knowledge_grant,
 }
 
 

@@ -223,10 +223,28 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
             raise StandardAPIError(
                 status.HTTP_404_NOT_FOUND, "KNOWLEDGE_CONSOLE_DISABLED", "console access is not enabled"
             )
+        target_env = settings.environment
         try:
             tenant_id = context.dify_workspaces.tenant_for_workspace(workspace, settings.environment)
         except DifyWorkspaceError as exc:
-            raise StandardAPIError(exc.http_status, exc.code, exc.message, retryable=exc.retryable) from exc
+            if exc.code == "DIFY_WORKSPACE_UNRESOLVED" and getattr(
+                settings, "environment_management_registry_file", ""
+            ):
+                try:
+                    entry = context.dify_workspaces.entry_for_workspace(workspace)
+                except DifyWorkspaceError as inner_exc:
+                    raise StandardAPIError(
+                        inner_exc.http_status,
+                        inner_exc.code,
+                        inner_exc.message,
+                        retryable=inner_exc.retryable,
+                    ) from inner_exc
+                tenant_id = entry["tenant_id"]
+                target_env = entry["environment"]
+            else:
+                raise StandardAPIError(
+                    exc.http_status, exc.code, exc.message, retryable=exc.retryable
+                ) from exc
         except ValueError as exc:
             raise StandardAPIError(
                 status.HTTP_400_BAD_REQUEST, "KNOWLEDGE_OPEN_WORKSPACE_INVALID", str(exc)
@@ -236,7 +254,7 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
         try:
             _target, session = ragflow_console.open_console(
                 store=context.store,
-                environment=settings.environment,
+                environment=target_env,
                 caller=ragflow_console.DeclaredTenant(effective_tenant_id=tenant_id),
                 credential_key=settings.ragflow_credential_key,
                 client=client,
@@ -247,7 +265,7 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
             ragflow_console.record(
                 context.store,
                 tenant_id=tenant_id,
-                environment=settings.environment,
+                environment=target_env,
                 outcome="refused",
                 reason_code=exc.code,
             )
@@ -260,7 +278,7 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
         ragflow_console.record(
             context.store,
             tenant_id=tenant_id,
-            environment=settings.environment,
+            environment=target_env,
             outcome="granted",
             ragflow_email=session.ragflow_email,
         )

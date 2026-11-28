@@ -8,8 +8,6 @@ from aiops_diagnostics.identity.order_identity import is_order_identifier
 
 from . import bridge
 
-_SCOPES = frozenset({"both", "consumer", "operator"})
-_ENTRIES = frozenset({"consumer", "operator"})
 _CAPABILITIES = frozenset({"consumer", "order", "offline"})
 _ALLOWED_ROLES = frozenset({"owner", "admin", "editor"})
 
@@ -77,7 +75,6 @@ _ALLOWED_PAYLOAD_KEYS = (
             "source_version",
             "tenant_id",
             "name",
-            "request_key",
             "id",
             "revision",
             "registry_revision",
@@ -86,8 +83,6 @@ _ALLOWED_PAYLOAD_KEYS = (
             "draft",
             "version_no",
             "workspace_id",
-            "scope",
-            "sources",
             "question",
             "order_no",
             "trial_id",
@@ -127,7 +122,6 @@ _WIZARD_ACTIONS = frozenset(
 )
 
 _ACTION_ROUTES: dict[str, tuple[str, str]] = {
-    "catalogue": ("GET", "/catalogue"),
     "environments": ("GET", "/environments"),
     "environment-update": ("POST", "/environments"),
     "environment-drafts": ("GET", "/environment-drafts"),
@@ -138,7 +132,6 @@ _ACTION_ROUTES: dict[str, tuple[str, str]] = {
     "environment-draft-save": ("POST", "/environment-drafts"),
     "status": ("POST", "/status"),
     "readiness": ("POST", "/readiness"),
-    "create": ("POST", "/operations"),
     "publish": ("POST", "/publish"),
     "versions": ("POST", "/versions"),
     "version": ("POST", "/version"),
@@ -211,20 +204,11 @@ def _verify_browser_session(handler):
 
 
 def _resolve_action_route(action: str, payload: dict, rejected) -> tuple[str, str]:
-    if action in {"operation", "retry"}:
-        job = payload.pop("id", "")
-        if not _matches(_APP_ID, job):
-            raise rejected(400, "无效操作")
-        method, path = (
-            ("GET", "/operations/" + job)
-            if action == "operation"
-            else ("POST", "/operations/" + job + "/retry")
-        )
-    elif action in _ACTION_ROUTES:
+    if action in _ACTION_ROUTES:
         method, path = _ACTION_ROUTES[action]
     else:
         raise rejected(400, "无效管理动作")
-    if (method == "GET" or action == "retry") and payload:
+    if method == "GET" and payload:
         raise rejected(400, "无效参数")
     return method, path
 
@@ -451,8 +435,6 @@ def _validate_payload(action: str, payload: dict, settings, rejected) -> None:
     elif action not in {"environment-plan", "environment-task"} and set(payload) & {"environment", "enabled"}:
         raise rejected(400, "无效参数")
 
-    _validate_scope_and_sources(action, payload, rejected)
-
     if action in {"run-logs", "run-log"}:
         _validate_run_logs(action, payload, rejected)
     elif set(payload) & {"page", "limit", "run_id"}:
@@ -586,29 +568,3 @@ def authorize_workspace(handler, session, workspace_id):
     )
     if code != 200 or not isinstance(result, dict) or result.get("workspace_id") != workspace_id:
         raise bridge._Rejected(403, "当前账号无权访问此客户知识库，请重新登录或联系平台管理员")
-
-
-def _validate_scope_and_sources(action, payload, rejected):
-    """`scope`/`sources` 只属于 `create`，且形状固定。"""
-    if "scope" not in payload and "sources" not in payload:
-        return
-    if action != "create":
-        raise rejected(400, "无效参数")
-    scope = payload.get("scope", "both")
-    if not isinstance(scope, str) or scope not in _SCOPES:
-        raise rejected(400, "无效开通范围")
-    sources = payload.get("sources")
-    if sources is None:
-        return
-    if not isinstance(sources, dict) or not sources or set(sources) - _ENTRIES:
-        raise rejected(400, "无效来源")
-    wanted = _ENTRIES if scope == "both" else {scope}
-    if set(sources) != wanted:
-        raise rejected(400, "来源与开通范围不一致")
-    for spec in sources.values():
-        if not isinstance(spec, dict) or set(spec) != {"app_id", "version_no"}:
-            raise rejected(400, "无效来源")
-        if not _matches(_APP_ID, spec["app_id"]):
-            raise rejected(400, "无效来源应用")
-        if not _pos_int(spec["version_no"]):
-            raise rejected(400, "无效来源版本")

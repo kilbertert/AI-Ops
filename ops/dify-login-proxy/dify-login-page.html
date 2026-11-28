@@ -165,7 +165,8 @@
         var option = document.createElement("option"); option.value = row.id; option.textContent = row.name;
         environment.appendChild(option);
       });
-      document.getElementById("environment-row").hidden = !data.selection_required;
+      document.getElementById("environment-row").hidden =
+        !data.selection_required || data.environments.length <= 1;
       refreshCaptcha();
     }).catch(function () { showError("登录环境尚未准备好，请联系管理员"); });
 

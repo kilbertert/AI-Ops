@@ -1,22 +1,3 @@
-diff --git a/web/features/home/home-content/home-content.tsx b/web/features/home/home-content/home-content.tsx
---- a/web/features/home/home-content/home-content.tsx
-+++ b/web/features/home/home-content/home-content.tsx
-@@ -34,6 +34,7 @@
- import { consoleQuery } from '@/service/console'
- import { trackCreateApp } from '@/utils/create-app-tracking'
- import { hasPermission } from '@/utils/permission'
-+import TenantSetup from '@/app/components/aiops-management'
- import { HomeBanner } from '../banner/home-banner'
- import { HomeIntro } from '../home-intro'
- import { HomeShell } from '../home-shell'
-@@ -407,6 +408,7 @@
-   return (
-     <HomeShell>
-       <div className="flex flex-1 flex-col overflow-y-auto">
-+        <TenantSetup />
-         <HomeIntro />
-         {systemFeatures.enable_explore_banner && <HomeBanner />}
-         <HomeRecommendations
 diff --git a/web/app/components/workflow-app/components/workflow-header/features-trigger.tsx b/web/app/components/workflow-app/components/workflow-header/features-trigger.tsx
 --- a/web/app/components/workflow-app/components/workflow-header/features-trigger.tsx
 +++ b/web/app/components/workflow-app/components/workflow-header/features-trigger.tsx

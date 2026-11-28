@@ -1,6 +1,6 @@
 """客户从应用管理面授权自己的库；请求不能指定其他租户。"""
 
-from dify.test_dual_entry import dual, request, run  # noqa: F401
+from dify.test_dual_entry import dual  # noqa: F401
 from operations.test_operator_cpms import operator  # noqa: F401
 
 from aiops_diagnostics.consumer.knowledge_access import KnowledgeGrants
@@ -8,9 +8,23 @@ from aiops_diagnostics.dify import self_service_identity as auth
 
 
 def test_customer_can_enable_and_revoke_own_library_only(dual, monkeypatch):  # noqa: F811
-    result = run(dual, request(dual))
-    app = result["entries"]["consumer"]["app_id"]
     tenant = "TENANT-B"
+    app = "bbbbbbbb-1111-2222-3333-444444444444"
+    dual.service.store.register(
+        app_id=app,
+        tenant_id=tenant,
+        workspace_id="workspace-tenant-b",
+        agent_name="consumer-tenant-b",
+        profile_id="",
+        actor="fixture",
+        entry="consumer",
+        environment="env-a",
+        targets={
+            "knowledge_base_ids": ["own-library"],
+            "live_order_status": True,
+            "live_billing_record": True,
+        },
+    )
     monkeypatch.setattr(auth, "identity", lambda *a: auth.ManagerIdentity("manager", tenant, False, "token"))
     rows = [{"knowledge_base_id": "own-library", "name": "客户资料"}]
     monkeypatch.setattr(dual.kb, "list_knowledge_bases", lambda: rows)

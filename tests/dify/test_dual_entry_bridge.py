@@ -65,8 +65,10 @@ def test_candidate_workspace_request_crosses_bridge_but_resource_claims_do_not(b
         assert _manage({**consumer, **extra}, address=bridge)[0] == 400
 
 
-def test_dual_entry_payload_crosses_the_real_bridge(bridge, upstream):  # noqa: F811
-    status, body = _manage(
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"action": "catalogue"},
         {
             "action": "create",
             "scope": "both",
@@ -78,18 +80,13 @@ def test_dual_entry_payload_crosses_the_real_bridge(bridge, upstream):  # noqa: 
             "request_key": "review-request-000001",
             "name": "客户B－客服与管家",
         },
-        address=bridge,
-    )
-    assert status != 400, body
-    assert "unexpected field" not in json.dumps(body)
-    # 桥转发到网关的那一刻，payload 原样带上两端来源。
-    # 判据必须落在上游**真的**收到的那条请求上：`_Upstream` 只记 `calls`
-    # （含 path/body），没有 `manage_requests`；按属性存在与否取值的写法恒真。
-    forwarded = [c for c in upstream.calls if c["path"].startswith("/v1/dify/manage")]
-    assert len(forwarded) == 1, [c["path"] for c in upstream.calls]
-    sources = forwarded[0]["body"]["sources"]
-    assert sources["consumer"]["app_id"] == CONSUMER
-    assert sources["operator"]["app_id"] == OPERATOR
+        {"action": "operation", "id": CONSUMER},
+        {"action": "retry", "id": CONSUMER},
+    ],
+)
+def test_retired_copy_setup_actions_are_rejected_by_bridge(bridge, payload):  # noqa: F811
+    status, _body = _manage(payload, address=bridge)
+    assert status == 400
 
 
 def test_candidate_chain_crosses_bridge_and_rejects_forged_inputs(bridge, upstream):  # noqa: F811
@@ -136,83 +133,15 @@ def test_initial_installation_crosses_bridge_only_as_explicit_true(bridge, upstr
     assert len([c for c in upstream.calls if c["path"] == "/v1/dify/management/environment-tasks"]) == count
 
 
-def test_single_entry_payload_crosses_with_matching_scope(bridge):  # noqa: F811
-    status, body = _manage(
-        {
-            "action": "create",
-            "scope": "consumer",
-            "sources": {"consumer": {"app_id": CONSUMER, "version_no": 1}},
-            "tenant_id": "TENANT-B",
-            "request_key": "review-request-000002",
-            "name": "客户B－客服",
-        },
-        address=bridge,
-    )
-    assert status != 400, body
-
-
 @pytest.mark.parametrize(
     "payload",
     [
-        # 范围与来源不一致：scope=both 却只给一端
-        {
-            "action": "create",
-            "scope": "both",
-            "sources": {"consumer": {"app_id": CONSUMER, "version_no": 1}},
-            "tenant_id": "TENANT-B",
-            "request_key": "review-request-000003",
-            "name": "x",
-        },
-        # 未知端
-        {
-            "action": "create",
-            "scope": "both",
-            "sources": {
-                "consumer": {"app_id": CONSUMER, "version_no": 1},
-                "admin": {"app_id": OPERATOR, "version_no": 1},
-            },
-            "tenant_id": "TENANT-B",
-            "request_key": "review-request-000004",
-            "name": "x",
-        },
-        # 来源里多带字段
-        {
-            "action": "create",
-            "scope": "consumer",
-            "sources": {"consumer": {"app_id": CONSUMER, "version_no": 1, "tenant_id": "TENANT-C"}},
-            "tenant_id": "TENANT-B",
-            "request_key": "review-request-000005",
-            "name": "x",
-        },
-        # 版本号不是正整数
-        {
-            "action": "create",
-            "scope": "consumer",
-            "sources": {"consumer": {"app_id": CONSUMER, "version_no": "1"}},
-            "tenant_id": "TENANT-B",
-            "request_key": "review-request-000006",
-            "name": "x",
-        },
-        # 范围本身不认识
-        {
-            "action": "create",
-            "scope": "all",
-            "sources": {"consumer": {"app_id": CONSUMER, "version_no": 1}},
-            "tenant_id": "TENANT-B",
-            "request_key": "review-request-000007",
-            "name": "x",
-        },
+        {"action": "create", "tenant_id": "TENANT-B"},
+        {"action": "status", "app_id": CONSUMER, "scope": "both", "sources": {}},
     ],
 )
-def test_malformed_dual_entry_payload_is_still_rejected_by_the_bridge(bridge, payload):  # noqa: F811
-    status, body = _manage(payload, address=bridge)
-    assert status == 400
-
-
-def test_scope_and_sources_are_create_only(bridge):  # noqa: F811
-    status, _ = _manage(
-        {"action": "status", "app_id": CONSUMER, "scope": "both", "sources": {}}, address=bridge
-    )
+def test_retired_or_injected_copy_setup_fields_are_rejected(bridge, payload):  # noqa: F811
+    status, _body = _manage(payload, address=bridge)
     assert status == 400
 
 

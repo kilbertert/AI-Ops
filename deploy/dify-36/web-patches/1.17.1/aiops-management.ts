@@ -26,6 +26,10 @@ export type Status = {
   live_app_id?: string
   live_version_no?: number
   draft_sha256?: string
+  environment?: string
+  environment_name?: string
+  tenant_name?: string
+  remote_managed?: boolean
 }
 
 export type Source = { app_id: string; name: string; version_no: number }

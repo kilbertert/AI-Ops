@@ -7,8 +7,7 @@ from operations.test_operator_cpms import operator  # noqa: F401
 
 from aiops_diagnostics.consumer.knowledge_access import KnowledgeGrants
 from aiops_diagnostics.dify import self_service_api, service_keys
-from aiops_diagnostics.dify import self_service_prepare as prepare
-from dify.test_dual_entry import TARGET, Dsl, dual, request, run  # noqa: F401
+from dify.test_dual_entry import TARGET, Dsl, dual  # noqa: F401
 
 
 def test_revoke_survives_startup_backfill(tmp_path):
@@ -80,88 +79,6 @@ def test_key_operation_snapshot_contains_no_plaintext_key(tmp_path, monkeypatch)
     assert marker not in raw, "key operation persisted an unrelated integration token in plaintext"
 
 
-def test_published_content_cannot_change_after_digest_check(dual, monkeypatch):  # noqa: F811
-    from aiops_diagnostics.consumer.consumer_publication import workflow_of
-
-    only = {"consumer": {"app_id": dual.consumer_source, "version_no": dual.consumer_version}}
-    result = run(dual, request(dual, scope="consumer", sources=only, key="r2-digest-window-001"))
-    app = result["entries"]["consumer"]["app_id"]
-    status = dual.service.status(dual.caller, app)
-    doc = dual.console.apps[app]
-    original = Dsl.export_dsl
-    calls = [0]
-
-    def changing(self, app_id=None, **kw):
-        target = app_id or self.source.app_id
-        if target == app and not kw.get("workflow_id"):
-            calls[0] += 1
-            if calls[0] == 2:
-                for node in doc["workflow"]["graph"]["nodes"]:
-                    if node["data"].get("type") == "llm":
-                        template = node["data"].get("prompt_template", [])
-                        if template:
-                            template[0]["text"] += " SYNTHETIC_UNCONFIRMED_EDIT"
-                        break
-        return original(self, app_id, **kw)
-
-    monkeypatch.setattr(Dsl, "export_dsl", changing)
-    try:
-        dual.service.publish(dual.caller, app, status["route_revision"], status["draft_sha256"])
-    except Exception as exc:
-        assert "DRAFT" in str(exc) or "changed" in str(exc).lower()
-        return
-    route = dual.service.route_for(TARGET, "consumer")
-    frozen = dual.context.agent_manager.store.version(route.agent_id, TARGET, route.agent_version_no).snapshot
-    print("published-matches-confirmed", workflow_of(frozen["workflow"]) == status["draft_sha256"])
-    assert workflow_of(frozen["workflow"]) == status["draft_sha256"], "unconfirmed edit was published"
-
-
-def test_step_exception_does_not_print_sensitive_details(dual, monkeypatch, capsys):  # noqa: F811
-    marker = "SYNTHETIC_UPSTREAM_CREDENTIAL_SHOULD_NOT_LOG"
-    monkeypatch.setattr(
-        prepare, "consumer_plugin", lambda *a, **k: (_ for _ in ()).throw(RuntimeError(marker))
-    )
-    only = {"consumer": {"app_id": dual.consumer_source, "version_no": dual.consumer_version}}
-    result = run(dual, request(dual, scope="consumer", sources=only, key="r2-log-safety-001"))
-    assert result["state"] == "failed"
-    captured = capsys.readouterr()
-    print("sensitive_detail_logged", marker in captured.err)
-    assert marker not in captured.err, "raw upstream exception printed into service log"
-
-
-def test_lost_knowledge_create_response_does_not_create_second_library(dual, monkeypatch):  # noqa: F811
-    original = dual.kb.create_knowledge_base
-    original_list = dual.kb.list_knowledge_bases
-    lose = [True]
-    list_unavailable = [False]
-
-    def created_but_lost(*a, **kw):
-        result = original(*a, **kw)
-        if lose[0]:
-            lose[0] = False
-            list_unavailable[0] = True
-            raise TimeoutError("synthetic dataset creation reply lost")
-        return result
-
-    def list_after_create():
-        if list_unavailable[0]:
-            list_unavailable[0] = False
-            raise TimeoutError("synthetic dataset list unavailable")
-        return original_list()
-
-    monkeypatch.setattr(dual.kb, "create_knowledge_base", created_but_lost)
-    monkeypatch.setattr(dual.kb, "list_knowledge_bases", list_after_create)
-    only = {"consumer": {"app_id": dual.consumer_source, "version_no": dual.consumer_version}}
-    job = dual.service.create(
-        dual.caller, request(dual, scope="consumer", sources=only, key="r2-knowledge-loss-000001")
-    )
-    dual.service.run(job["id"], "session")
-    assert len(dual.kb.created) == 1
-    dual.service.run(job["id"], "session")
-    print("knowledge-datasets-created", len(dual.kb.created))
-    assert len(dual.kb.created) == 1, "lost response caused duplicate knowledge library"
-
-
 def test_legacy_key_journal_is_migrated_to_ids_only(tmp_path):
     import json
     import sqlite3
@@ -196,52 +113,6 @@ def test_only_explicit_grant_can_reenable_revoked_knowledge(tmp_path):
     assert g.granted("t", "env") == {"kb"}
 
 
-@pytest.mark.parametrize("failure", ["consumer_endpoint", "consumer_plugin", "consumer_models"])
-def test_dependencies_fail_before_any_customer_library_is_created(dual, monkeypatch, failure):  # noqa: F811
-    original = getattr(prepare, failure)
-
-    def unavailable(*args, **kwargs):
-        raise prepare.SetupRefused("SETUP_STEP_FAILED")
-
-    monkeypatch.setattr(prepare, failure, unavailable)
-    only = {"consumer": {"app_id": dual.consumer_source, "version_no": dual.consumer_version}}
-    for index in range(2):
-        job = dual.service.create(
-            dual.caller, request(dual, scope="consumer", sources=only, key=f"dependency-first-{index:03}")
-        )
-        for _ in range(2):
-            dual.service.run(job["id"], "session")
-            assert dual.service.store.get(job["id"])["state"] == "failed"
-        assert dual.kb.created == [], "failed setup created an unusable customer library"
-    monkeypatch.setattr(prepare, failure, original)
-    dual.service.run(job["id"], "session")
-    assert dual.service.store.get(job["id"])["state"] == "completed"
-    assert len(dual.kb.created) == 1
-
-
-def test_same_job_resumes_after_app_import_failure_without_creating_another_library(dual, monkeypatch):  # noqa: F811
-    real = prepare.copy_consumer_app
-    calls = []
-
-    def fail_once(*args, **kwargs):
-        calls.append(1)
-        if len(calls) == 1:
-            raise TimeoutError("synthetic import unavailable")
-        return real(*args, **kwargs)
-
-    monkeypatch.setattr(prepare, "copy_consumer_app", fail_once)
-    only = {"consumer": {"app_id": dual.consumer_source, "version_no": dual.consumer_version}}
-    job = dual.service.create(
-        dual.caller, request(dual, scope="consumer", sources=only, key="import-resume-library-001")
-    )
-    dual.service.run(job["id"], "session")
-    assert dual.service.store.get(job["id"])["state"] == "failed"
-    assert len(dual.kb.created) == 1
-    dual.service.run(job["id"], "session")
-    assert dual.service.store.get(job["id"])["state"] == "completed"
-    assert len(dual.kb.created) == 1
-
-
 @pytest.mark.parametrize("failure", ["readonly", "full"])
 def test_key_storage_refusal_precedes_external_key_creation(tmp_path, monkeypatch, failure):
     import errno
@@ -263,65 +134,3 @@ def test_key_storage_refusal_precedes_external_key_creation(tmp_path, monkeypatc
             console, key_dir, "w", "11111111-1111-4111-8111-111111111111", database=tmp_path / "db"
         )
     assert console.key_posts == 0
-
-
-def test_unwritable_keys_fail_before_customer_resources(dual, monkeypatch):  # noqa: F811
-    from aiops_diagnostics.dify.self_service_store import public_job
-
-    real = service_keys.ensure_private_directory
-    key_dir = service_keys.Path(dual.settings.chat_dify_key_dir)
-
-    def unavailable(path):
-        if path == key_dir:
-            raise OSError(30, "synthetic read-only filesystem")
-        return real(path)
-
-    monkeypatch.setattr(service_keys, "ensure_private_directory", unavailable)
-    only = {"consumer": {"app_id": dual.consumer_source, "version_no": dual.consumer_version}}
-    job = dual.service.create(
-        dual.caller, request(dual, scope="consumer", sources=only, key="key-storage-first-001")
-    )
-    dual.service.run(job["id"], "session")
-    result = public_job(dual.service.store.get(job["id"]))
-    assert result["entries"]["consumer"]["error_code"] == "SETUP_KEY_DIRECTORY_UNWRITABLE"
-    assert dual.kb.created == []
-    assert dual.console.created == []
-    assert dual.console.key_posts == 0
-
-    monkeypatch.setattr(service_keys, "ensure_private_directory", real)
-    dual.service.run(job["id"], "session")
-    assert dual.service.store.get(job["id"])["state"] == "completed"
-    assert len(dual.kb.created) == 1
-    assert dual.console.key_posts == 1
-
-
-def test_retry_reuses_valid_key_when_storage_becomes_readonly(dual, monkeypatch):  # noqa: F811
-    from aiops_diagnostics.dify.self_service_identity import SetupRefused
-    from aiops_diagnostics.dify.self_service_store import public_job
-
-    publish = dual.service.publish
-
-    def fail_once(caller, app, *args):
-        if dual.service.managed(app)["entry"] == "consumer":
-            raise SetupRefused("SETUP_EXECUTOR_UNAVAILABLE")
-        return publish(caller, app, *args)
-
-    monkeypatch.setattr(dual.service, "publish", fail_once)
-    job = dual.service.create(dual.caller, request(dual, key="readonly-key-retry-001"))
-    dual.service.run(job["id"], "session")
-    first = public_job(dual.service.store.get(job["id"]))
-    assert first["state"] == "partial"
-    apps = {end: item["app_id"] for end, item in first["entries"].items()}
-    assert dual.console.key_posts == 1
-    monkeypatch.setattr(dual.service, "publish", publish)
-
-    def readonly(path):
-        raise OSError(30, "synthetic read-only mount")
-
-    monkeypatch.setattr(service_keys, "storage_ready", readonly)
-    dual.service.store.pending(job["id"])
-    dual.service.run(job["id"], "session")
-    second = public_job(dual.service.store.get(job["id"]))
-    assert second["state"] == "completed"
-    assert {end: item["app_id"] for end, item in second["entries"].items()} == apps
-    assert dual.console.key_posts == 1

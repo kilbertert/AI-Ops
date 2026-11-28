@@ -759,6 +759,26 @@ export default function EnvironmentManagement() {
   const [expiredPlanIds, setExpiredPlanIds] = useState<string[]>([])
   const [showWizard, setShowWizard] = useState(false)
   const [envQuery, setEnvQuery] = useState('')
+  const [workspaceBusyKey, setWorkspaceBusyKey] = useState('')
+
+  const openTenantWorkspace = async (workspaceId: string, knowledge = false) => {
+    if (!workspaceId) return
+    const key = `${workspaceId}:${knowledge ? 'kb' : 'apps'}`
+    setWorkspaceBusyKey(key)
+    setError('')
+    try {
+      await manage('workspace', { workspace_id: workspaceId })
+      window.location.assign(
+        knowledge
+          ? `/__aiops/knowledge-open?workspace=${encodeURIComponent(workspaceId)}`
+          : '/apps',
+      )
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '进入工作区失败')
+    } finally {
+      setWorkspaceBusyKey('')
+    }
+  }
 
   const saved = data?.drafts.find((item) => item.environment === selected)
   const live = data?.effective.find((item) => item.id === selected)
@@ -2491,6 +2511,47 @@ export default function EnvironmentManagement() {
                                         )
                                       })}
                                     </div>
+
+                                    {tenant.workspace.id && (
+                                      <div className="flex flex-wrap items-center gap-1.5">
+                                        <button
+                                          type="button"
+                                          disabled={workspaceBusyKey !== ''}
+                                          onClick={() =>
+                                            void openTenantWorkspace(tenant.workspace.id, false)
+                                          }
+                                          className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-divider-accent/40 bg-components-badge-bg-blue-light-soft px-2.5 py-1 system-xs-medium text-text-accent transition-colors hover:bg-state-accent-hover disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                          <span
+                                            aria-hidden="true"
+                                            className="i-ri-apps-2-line size-3.5"
+                                          />
+                                          <span>
+                                            {workspaceBusyKey === `${tenant.workspace.id}:apps`
+                                              ? '切换中…'
+                                              : '进入工作区'}
+                                          </span>
+                                        </button>
+                                        <button
+                                          type="button"
+                                          disabled={workspaceBusyKey !== ''}
+                                          onClick={() =>
+                                            void openTenantWorkspace(tenant.workspace.id, true)
+                                          }
+                                          className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-divider-subtle bg-components-panel-bg px-2.5 py-1 system-xs-medium text-text-secondary transition-colors hover:border-divider-regular hover:bg-background-section-burn hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                          <span
+                                            aria-hidden="true"
+                                            className="i-ri-book-open-line size-3.5"
+                                          />
+                                          <span>
+                                            {workspaceBusyKey === `${tenant.workspace.id}:kb`
+                                              ? '打开中…'
+                                              : '进入知识库'}
+                                          </span>
+                                        </button>
+                                      </div>
+                                    )}
 
                                     <button
                                       type="button"
