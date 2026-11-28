@@ -1,50 +1,25 @@
 # Dify 控制台里的「发布到 AI-Ops」按钮（#577 的最后一跳）
 
-> **标准 ACR 发布与 36 总览**：本服务现已收敛至 `aiops-dify-edge` OCI 镜像（与登录代理共享构建镜像、双容器隔离运行，见 [`deploy/dify-36/ARCHITECTURE.md`](../../deploy/dify-36/ARCHITECTURE.md) 与 ADR-0367）；以下 `build-bundle.sh` / `deploy.sh` 为兼容保留的历史 tar 回滚细节。
+> **标准 ACR 发布与 36 总览**：本服务现已收敛至 `aiops-dify-edge` OCI 镜像（与登录代理共享构建镜像、双容器隔离运行，见 [`deploy/dify-36/ARCHITECTURE.md`](../../deploy/dify-36/ARCHITECTURE.md)、ADR-0367 与 ADR-0369）；旧 `build-bundle.sh` / `deploy.sh` tar 打包脚本与宿主 systemd 单元已彻底退役删除。
 
 受限Dify服务API入口、正式用途及合并制品安装与恢复见[操作手册](../../docs/agents/shared-dify-https-fallback.md)。
 它不提供控制台或内部管理服务；是否已部署以交付回执为准。
 
-**这是什么**：为 Dify 控制台提供同源 `/__aiops/*` HTTP 发布桥服务（`publish`/`retract`/`restore`/`versions`/`trial`/`operator-preview`/`manage`/`knowledge-open`）。前端界面与按钮组件统一位于 [`deploy/dify-36/web-patches/`](../../deploy/dify-36/web-patches/README.md)，不再使用 Nginx `sub_filter` 运行时 JS 注入（ADR-0366）。
+**这是什么**：为 Dify 控制台提供同源 `/__aiops/*` HTTP 发布桥服务（`publish`/`retract`/`restore`/`versions`/`trial`/`operator-preview`/`manage`/`knowledge-open`）及 `/aiops/*` 独立管理台静态托管（`services/aiops-console/`，ADR-0368）。编排页内嵌扩展组件位于 [`deploy/dify-36/web-patches/`](../../deploy/dify-36/web-patches/README.md)，不再使用 Nginx `sub_filter` 运行时 JS 注入（ADR-0366）。
 
-决定的论证在 **ADR-0021**、**ADR-0338** 与 **ADR-0366**；后端桥独立位于 `services/dify-console-bridge/dify_console_bridge/`。
-本目录只是**部署资产**。
+决定的论证在 **ADR-0021**、**ADR-0338** 与 **ADR-0366 ~ 0369**；后端桥独立位于 `services/dify-console-bridge/dify_console_bridge/`。
+本目录主要保留**边缘 Nginx 配置与服务 API 回退资产**。
 
 管家原生预览与受管发布条已直编进 `deploy/dify-36/web-patches/`（无需 Nginx 注入 JS）。更新后的 Python 桥及 `/__aiops/operator-preview` 路由需与前端镜像保持兼容；其 SSE 禁止代理缓冲，200秒代理超时覆盖180秒预览上限。详见[原生预览手册](../../docs/agents/operator-cpms/native-preview.md)。
 
-## M3 部署包与恢复
+## 现行部署与回滚（ACR OCI）
 
-Gateway 的 CD 不更新本桥。撤回、恢复和版本列表要求 **Python 桥与 nginx snippet** 同版。`build-bundle.sh` 从确定 Git 修订打包这两部分及桥的全部标准库依赖，写入 `REVISION`、`SHA256SUMS`，不携带 env 或凭据。
-
-```bash
-# 开发机：只用已合并修订，输出目录为私有目录
-bash ops/dify-console-bridge/build-bundle.sh origin/main /tmp/bridge.tar.gz
-# 使用 dev-host cp 36 ... --dest <暂存路径> --artifact-sha256 <上述摘要> 上传。
-# 服务宿主：先验证外层 tar 摘要，再解压到新的暂存目录；通过 dev-host exec 执行：
-bash <暂存目录>/deploy.sh <暂存目录> <新的私有备份目录>
-```
-
-脚本更新现有服务目录，保留服务身份、解释器、env、登录代理及 TLS 入口。
-它会短暂停止桥，替换代码及静态文件，`nginx -t` 后启动桥并 reload nginx；
-三个新路由的无会话请求必须得到 JSON 403；reload 是异步的，每条路由最多等待 15 次。
-超时或安装失败自动恢复原包、JS、snippet 并重启桥。
-成功后还须用登录运营账号做发布/试用/撤回/恢复验收；无会话 403 只证明路由和拒绝门。
-
-成功部署后若要人工恢复，使用本次备份（与 `deploy.sh` 自动恢复步骤一致，同步还原两个代码目录与 `bridge.service` 单元，不恢复配置或数据库）：
+代码合入 `main` 后，[`.github/workflows/release-dify-edge-image.yml`](../../.github/workflows/release-dify-edge-image.yml) 会自动构建并推送不可变 `@sha256` 镜像 `aiops-dify-edge` 至公司阿里云 ACR；在开发机执行一条命令即可完成 `36` 上的隔离容器切换与健康探活：
 
 ```bash
-systemctl stop aiops-dify-console-bridge.service
-rm -rf /opt/aiops-console-bridge/aiops_diagnostics /opt/aiops-console-bridge/dify_console_bridge
-cp -a <备份>/aiops_diagnostics /opt/aiops-console-bridge/aiops_diagnostics
-if [ -e <备份>/dify_console_bridge ]; then cp -a <备份>/dify_console_bridge /opt/aiops-console-bridge/dify_console_bridge; fi
-cp -a <备份>/dify-console-publish.conf /www/server/panel/vhost/nginx/snippets/dify-console-publish.conf
-cp -a <备份>/bridge.service /etc/systemd/system/aiops-dify-console-bridge.service
-systemctl daemon-reload
-/www/server/nginx/sbin/nginx -t && /www/server/nginx/sbin/nginx -s reload
-systemctl start aiops-dify-console-bridge.service
+bash deploy/dify-36/edge/deploy-edge-image.sh --image <AIOPS_DIFY_EDGE_IMAGE_REPO>@sha256:<64hex> --service all
+bash deploy/dify-36/edge/deploy-edge-image.sh --rollback --service all
 ```
-
-以上是操作方法，不是生产启用授权；部署与运行配置的变更范围需单独写入私有变更单。
 
 ## 组件与安装位置
 
@@ -52,8 +27,8 @@ systemctl start aiops-dify-console-bridge.service
 |---|---|---|
 | `dify-console-TLS.conf` | `/www/server/panel/vhost/nginx/` (36) | **TLS 域名入口**（#776）：`dify.ranlei.work` 的 80 跳转 + 443，反代到 10008 |
 | `dify-console-10008.conf` | `/www/server/panel/vhost/nginx/` (36) | 10008 server 块：转发 Dify + 挂载桥与登录代理 snippet |
-| `dify-console-publish.conf` | `/www/server/panel/vhost/nginx/snippets/` | 桥的同源 `/__aiops/*` 转发（含 cookie 与 CSRF 头） |
-| `aiops-dify-console-bridge.service` | `/etc/systemd/system/` | 桥的服务单元（身份 `aiopsbridge`） |
+| `dify-console-publish.conf` | `/www/server/panel/vhost/nginx/snippets/` | 桥的同源 `/__aiops/*` 与 `/aiops` 转发（含 cookie、CSRF 与 `X-Request-Id`） |
+| 容器 `aiops-dify-console-bridge` | 36 Docker (`aiops-dify-edge@sha256`) | 以 `aiopsbridge` 只读运行的发布桥容器（管理见 `deploy-edge-image.sh`） |
 
 ## 拓扑
 

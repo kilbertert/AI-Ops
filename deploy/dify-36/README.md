@@ -1,6 +1,6 @@
 # Dify 1.17.1 @ yidong-36（#579 / PRD #577）
 
-> **36 宿主总览入口（推荐先读）**：关于 Web 与双侧边车（`console-bridge` / `login-proxy`）如何经阿里云 ACR `@sha256` 分发及容器隔离边界，见 [ARCHITECTURE.md](ARCHITECTURE.md)（ADR-0365 / ADR-0366 / ADR-0367）。
+> **36 宿主总览入口（推荐先读）**：关于 Web 与双侧边车（`console-bridge` / `login-proxy`）及 `/aiops/*` 独立工作台如何经阿里云 ACR `@sha256` 分发及容器隔离边界，见 [ARCHITECTURE.md](ARCHITECTURE.md)（ADR-0365 ~ ADR-0369）。本文件保留初版 `#579` 基础设施基线与 Dify 上游容器配置细节作归档对照；日常发版命令请以 [ARCHITECTURE.md](ARCHITECTURE.md) 为唯一入口。
 
 当前产品路径与交付状态见[当前说明](../../docs/agents/current-delivery-state.md)。本文件是部署/维护方法，配置默认关闭不代表现役全部关闭；
 新旧执行器和场景分别验收，不按一个服务进程推断全系统已迁移。
