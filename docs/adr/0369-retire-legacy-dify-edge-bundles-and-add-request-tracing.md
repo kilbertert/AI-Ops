@@ -28,3 +28,9 @@
 
 - **单一真相源彻底闭环**：边缘层仅余 [edge/deploy-edge-image.sh](../../deploy/dify-36/edge/deploy-edge-image.sh) 与 [web-patches/deploy-web-image.sh](../../deploy/dify-36/web-patches/deploy-web-image.sh) 两条 ACR `@sha256` 交付链。
 - **排障效率提升**：从浏览器 Network 面板取一枚 `X-Request-Id` 即可在容器日志里一次性对齐所有边缘跳。
+
+## 备选方案
+
+1. **保留旧 `build-bundle.sh` / `deploy.sh` 并标记为“废弃提示脚本”**：被否。只要脚本留在仓库中，CI、文档和新接手工程师仍须分辨两条平行发布链；既然 `aiops-dify-edge` 已连续稳定承载全部流量，直接从仓内删除并归档宿主旧目录才算真正收口。
+2. **仅用在线 Iconfont/CDN 字体或在 TSX 内手写 inline SVG 替代 `@egoist/tailwindcss-icons`**：被否。内网工作台不应增加外部字体 CDN 依赖，而 `aiops-console` 原代码已普遍使用 UnoCSS/Tailwind `i-ri-*` 语义类名；用 `@iconify-json/ri` 在 Vite 构建期编成静态 CSS `mask-image` 改动最小且零运行时开销。
+3. **仅在 Python 侧边车各自生成随机 `request_id` 而不由 Nginx 统一注入**：被否。浏览器触发的一次操作可能横跨 `/console/api/*`、`/aiops/*` 与 `/__aiops/*` 多条 upstream，只在后端各自生成会导致 Nginx 访问日志与 Python 日志无法串查。
