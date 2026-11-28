@@ -276,6 +276,7 @@ probe_service() {
 rollback_all() {
   local reason="$1"
   echo "!! $reason，正在自动回滚本次切换的 sidecar" >&2
+  local restore_failed=0
   for svc in "${SERVICES[@]}"; do
     local cname unit prev_docker prev_state was_sd
     if [ "$svc" = "bridge" ]; then
@@ -289,15 +290,26 @@ rollback_all() {
     prev_state="${SVC_PREV_IMG[$svc]:-}"
     was_sd="${SVC_WAS_SYSTEMD[$svc]:-0}"
     if [ -n "$prev_docker" ]; then
-      start_container "$svc" "$prev_docker" || true
+      if ! start_container "$svc" "$prev_docker"; then
+        echo "AUTO_ROLLBACK_FAILED:$svc：旧容器重建失败" >&2
+        restore_failed=1
+      fi
     elif [ -n "$prev_state" ]; then
-      start_container "$svc" "$prev_state" || true
+      if ! start_container "$svc" "$prev_state"; then
+        echo "AUTO_ROLLBACK_FAILED:$svc：旧容器重建失败" >&2
+        restore_failed=1
+      fi
     elif [ "$was_sd" = "1" ]; then
       docker rm -f "$cname" >/dev/null 2>&1 || true
-      systemctl enable --now "$unit" || true
+      if ! systemctl enable --now "$unit"; then
+        echo "AUTO_ROLLBACK_FAILED:$svc：旧 systemd 服务恢复失败" >&2
+        restore_failed=1
+      fi
     fi
   done
-  echo "AUTO_ROLLED_BACK" >&2
+  if [ "$restore_failed" = "0" ]; then
+    echo "AUTO_ROLLED_BACK" >&2
+  fi
   exit 1
 }
 
