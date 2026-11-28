@@ -9,7 +9,8 @@
 
   1. **不落任何凭据。** 不进 localStorage / sessionStorage，不写 document.cookie，
      不发任何第三方请求。这页接的是公司口令，XSS 或一条多余的 `<script src>` 就等于
-     把口令交出去。nginx 那一层配了 `default-src 'none'` 的 CSP 兜底。
+     把口令交出去。nginx 那一层配了 `default-src 'none'` 的 CSP 兜底（且 `img-src 'self'`
+     不含 `data:`，故本页全部图标与光学滤镜均采用纯内联 SVG，不使用任何 data URI）。
   2. **成功后跳服务端给的那个 redirect。** 那已经过 `safe_redirect_path` 白名单
      （只有站内相对路径能过），这一页不做第二次判断 —— 两处判断迟早会漂，
      而安全的那一处必须在服务端。
@@ -24,94 +25,985 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>登录 - AI-Ops 智能体控制台</title>
 <style>
-  :root { color-scheme: light dark; }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
-    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-          "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-    background: #f5f6f8; color: #1f2329;
+  :root {
+    color-scheme: light dark;
+
+    --ease-spatial: cubic-bezier(0.22, 1, 0.36, 1);
+    --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+    /* Material 3 Expressive Cool-Pearl Tonal Glass（与工作区浅色模式同步） */
+    --canvas-bg: #eef2fa;
+    --aurora-a: rgba(56, 189, 248, 0.24);
+    --aurora-b: rgba(59, 130, 246, 0.20);
+    --aurora-c: rgba(139, 92, 246, 0.16);
+    --grid-line: rgba(30, 58, 138, 0.045);
+
+    --glass-card-bg: linear-gradient(155deg, rgba(255, 255, 255, 0.90) 0%, rgba(246, 249, 255, 0.78) 100%);
+    --glass-popover-bg: rgba(255, 255, 255, 0.94);
+    --glass-pill-bg: rgba(255, 255, 255, 0.76);
+    --glass-border: rgba(15, 23, 42, 0.09);
+    --glass-border-strong: rgba(37, 99, 235, 0.30);
+    --glass-rim-top: rgba(255, 255, 255, 0.98);
+    --glass-rim-bottom: rgba(59, 130, 246, 0.14);
+    --glass-sheen: rgba(59, 130, 246, 0.10);
+    --glass-shadow:
+      0 2px 6px rgba(15, 23, 42, 0.05),
+      0 22px 54px -14px rgba(30, 58, 138, 0.18);
+    --popover-shadow:
+      0 6px 20px rgba(15, 23, 42, 0.08),
+      0 20px 44px -12px rgba(30, 58, 138, 0.18);
+
+    --text-primary: #101828;
+    --text-secondary: #475467;
+    --text-tertiary: #667085;
+    --text-placeholder: #98a2b3;
+
+    --input-bg: rgba(248, 250, 253, 0.84);
+    --input-bg-hover: rgba(255, 255, 255, 0.96);
+    --input-bg-focus: rgba(255, 255, 255, 0.98);
+    --input-border: rgba(15, 23, 42, 0.11);
+    --input-border-hover: rgba(37, 99, 235, 0.30);
+
+    --accent: #155aef;
+    --accent-soft: rgba(21, 90, 239, 0.10);
+    --accent-ring: rgba(21, 90, 239, 0.22);
+    --accent-text: #155aef;
+
+    --success-dot: #17b26a;
+    --error-bg: rgba(254, 243, 242, 0.92);
+    --error-border: rgba(240, 68, 56, 0.32);
+    --error-text: #b42318;
+    --divider: rgba(15, 23, 42, 0.08);
+    --option-hover: rgba(21, 90, 239, 0.08);
+    --option-active-bg: rgba(21, 90, 239, 0.12);
+    --shimmer-a: rgba(203, 213, 225, 0.35);
+    --shimmer-b: rgba(241, 245, 249, 0.85);
   }
-  @media (prefers-color-scheme: dark) { body { background: #17181a; color: #e8e8e8; } }
-  .card {
-    width: 100%; max-width: 360px; padding: 32px 28px; border-radius: 12px;
-    background: #fff; box-shadow: 0 2px 16px rgba(0, 0, 0, .08);
-  }
+
   @media (prefers-color-scheme: dark) {
-    .card { background: #232426; box-shadow: 0 2px 16px rgba(0, 0, 0, .4); }
+    :root {
+      /* Material 3 Expressive Obsidian-Indigo Tonal Glass（与工作区深色主页完全同步） */
+      --canvas-bg: #12151f;
+      --aurora-a: rgba(37, 99, 235, 0.22);
+      --aurora-b: rgba(14, 165, 233, 0.16);
+      --aurora-c: rgba(99, 102, 241, 0.22);
+      --grid-line: rgba(148, 163, 184, 0.045);
+
+      --glass-card-bg: linear-gradient(155deg, rgba(35, 40, 56, 0.82) 0%, rgba(24, 28, 40, 0.74) 100%);
+      --glass-popover-bg: rgba(28, 33, 46, 0.94);
+      --glass-pill-bg: rgba(38, 45, 64, 0.72);
+      --glass-border: rgba(255, 255, 255, 0.11);
+      --glass-border-strong: rgba(125, 168, 255, 0.38);
+      --glass-rim-top: rgba(255, 255, 255, 0.22);
+      --glass-rim-bottom: rgba(96, 165, 250, 0.16);
+      --glass-sheen: rgba(96, 165, 250, 0.15);
+      --glass-shadow:
+        0 4px 14px rgba(0, 0, 0, 0.38),
+        0 28px 64px -16px rgba(0, 0, 0, 0.68),
+        0 0 0 1px rgba(255, 255, 255, 0.03);
+      --popover-shadow:
+        0 10px 28px rgba(0, 0, 0, 0.48),
+        0 24px 56px -14px rgba(0, 0, 0, 0.72);
+
+      --text-primary: #fbfbfc;
+      --text-secondary: #cfd3df;
+      --text-tertiary: rgba(200, 206, 218, 0.68);
+      --text-placeholder: rgba(200, 206, 218, 0.38);
+
+      --input-bg: rgba(17, 20, 30, 0.56);
+      --input-bg-hover: rgba(22, 26, 39, 0.72);
+      --input-bg-focus: rgba(24, 29, 44, 0.86);
+      --input-border: rgba(255, 255, 255, 0.10);
+      --input-border-hover: rgba(125, 168, 255, 0.32);
+
+      --accent: #3072ff;
+      --accent-soft: rgba(48, 114, 255, 0.16);
+      --accent-ring: rgba(48, 114, 255, 0.28);
+      --accent-text: #7ea8ff;
+
+      --success-dot: #47cd89;
+      --error-bg: rgba(127, 29, 29, 0.34);
+      --error-border: rgba(249, 112, 102, 0.42);
+      --error-text: #fda29b;
+      --divider: rgba(255, 255, 255, 0.09);
+      --option-hover: rgba(255, 255, 255, 0.06);
+      --option-active-bg: rgba(48, 114, 255, 0.18);
+      --shimmer-a: rgba(51, 65, 85, 0.45);
+      --shimmer-b: rgba(71, 85, 105, 0.75);
+    }
   }
-  h1 { margin: 0 0 4px; font-size: 18px; font-weight: 600; }
-  p.sub { margin: 0 0 24px; font-size: 13px; color: #8a8f99; }
-  label { display: block; margin-bottom: 6px; font-size: 13px; color: #4a4f57; }
-  @media (prefers-color-scheme: dark) { label { color: #a8adb5; } }
-  input, select {
-    width: 100%; height: 38px; padding: 0 10px; margin-bottom: 16px;
-    border: 1px solid #d8dbe0; border-radius: 6px; background: transparent;
-    color: inherit; font-size: 14px;
+
+  *, *::before, *::after { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+
+  html, body {
+    margin: 0;
+    min-height: 100%;
   }
-  input:focus { outline: none; border-color: #1a6cf5; }
-  @media (prefers-color-scheme: dark) { input { border-color: #3a3d42; } }
-  .captcha-row { display: flex; gap: 10px; align-items: flex-start; }
-  .captcha-row input { flex: 1; }
-  #captcha {
-    width: 120px; height: 38px; border: 1px solid #d8dbe0; border-radius: 6px;
-    cursor: pointer; background: #fff; flex: none;
+
+  body {
+    position: relative;
+    min-height: 100vh;
+    min-height: 100dvh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px 16px;
+    overflow-x: hidden;
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans", sans-serif;
+    background-color: var(--canvas-bg);
+    color: var(--text-primary);
+    -webkit-font-smoothing: antialiased;
   }
-  @media (prefers-color-scheme: dark) { #captcha { border-color: #3a3d42; } }
-  button {
-    width: 100%; height: 40px; border: 0; border-radius: 6px; background: #1a6cf5;
-    color: #fff; font-size: 14px; font-weight: 500; cursor: pointer;
+
+  /* 全屏极光环境光晕画布（与主页 .aiops-ambient-shell 同源色域） */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    background-image:
+      radial-gradient(60% 52% at 12% 10%, var(--aurora-a) 0%, transparent 72%),
+      radial-gradient(50% 48% at 90% 14%, var(--aurora-b) 0%, transparent 70%),
+      radial-gradient(58% 54% at 50% 96%, var(--aurora-c) 0%, transparent 74%);
   }
-  button:disabled { opacity: .6; cursor: default; }
+
+  /* 柔和背景透视微格，增强液态玻璃折射层次 */
+  body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    background-image:
+      linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+      linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
+    background-size: 48px 48px;
+    -webkit-mask-image: radial-gradient(ellipse 68% 62% at 50% 50%, #000 18%, transparent 82%);
+    mask-image: radial-gradient(ellipse 68% 62% at 50% 50%, #000 18%, transparent 82%);
+  }
+
+  .lg-svg-defs {
+    position: fixed;
+    width: 0;
+    height: 0;
+    overflow: hidden;
+    pointer-events: none;
+  }
+
+  .shell {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    max-width: 428px;
+  }
+
+  /* Liquid Glass × Material 3 主登录卡片 */
+  .card {
+    position: relative;
+    width: 100%;
+    padding: 32px 30px 26px;
+    border-radius: 24px;
+    border: 1px solid var(--glass-border);
+    background: var(--glass-card-bg);
+    backdrop-filter: blur(26px) saturate(180%);
+    -webkit-backdrop-filter: blur(26px) saturate(180%);
+    box-shadow:
+      inset 0 1px 0 var(--glass-rim-top),
+      inset 0 -1px 0 var(--glass-rim-bottom),
+      var(--glass-shadow);
+    transition:
+      border-color 240ms var(--ease-spatial),
+      box-shadow 260ms var(--ease-spatial);
+  }
+
+  html[data-refract="on"] .card {
+    backdrop-filter: url(#aiops-login-lens) blur(26px) saturate(185%);
+  }
+
+  @media (prefers-color-scheme: light) {
+    html[data-refract="on"] .card {
+      backdrop-filter: url(#aiops-login-lens) blur(24px) saturate(175%) brightness(1.02);
+    }
+  }
+
+  .card:hover {
+    border-color: var(--glass-border-strong);
+  }
+
+  /* 独立高光裁切层，避免 .card 使用 overflow:hidden 裁切环境选择浮层 */
+  .card-sheen {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    overflow: hidden;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .card-sheen::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    opacity: var(--lg-glow, 0);
+    transition: opacity 240ms var(--ease-spatial);
+    background: radial-gradient(
+      340px circle at var(--lg-mx, 50%) var(--lg-my, 0%),
+      var(--glass-sheen),
+      transparent 66%
+    );
+  }
+
+  .card-inner {
+    position: relative;
+    z-index: 1;
+  }
+
+  /* 品牌顶栏 */
+  .brand-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 18px;
+  }
+
+  .brand-badge {
+    width: 44px;
+    height: 44px;
+    border-radius: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    background: linear-gradient(140deg, #3b82f6 0%, #155aef 55%, #0b3ed1 100%);
+    border: 1px solid rgba(255, 255, 255, 0.24);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.42),
+      0 8px 20px -6px rgba(21, 90, 239, 0.55);
+    flex: none;
+  }
+
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 12px;
+    border-radius: 9999px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    background: var(--glass-pill-bg);
+    border: 1px solid var(--glass-border);
+    box-shadow: inset 0 1px 0 var(--glass-rim-top);
+  }
+
+  .status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 9999px;
+    background: var(--success-dot);
+    box-shadow: 0 0 8px var(--success-dot);
+    flex: none;
+  }
+
+  h1 {
+    margin: 0 0 6px;
+    font-size: 21px;
+    font-weight: 600;
+    letter-spacing: -0.015em;
+    color: var(--text-primary);
+  }
+
+  p.sub {
+    margin: 0 0 22px;
+    font-size: 13px;
+    color: var(--text-tertiary);
+    line-height: 1.5;
+  }
+
+  /* 错误提示玻璃条 */
   #error {
-    margin: 0 0 16px; padding: 9px 11px; border-radius: 6px; font-size: 13px;
-    background: #fdecec; color: #c0392b; display: none;
+    display: none;
+    margin: 0 0 18px;
+    padding: 10px 13px;
+    border-radius: 12px;
+    border: 1px solid var(--error-border);
+    background: var(--error-bg);
+    color: var(--error-text);
+    font-size: 13px;
+    line-height: 1.45;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
   }
-  @media (prefers-color-scheme: dark) { #error { background: #3a2222; color: #ff9c8f; } }
+
+  .field {
+    margin-bottom: 16px;
+  }
+
+  #environment-row {
+    position: relative;
+    z-index: 20;
+    margin-bottom: 16px;
+  }
+
+  label {
+    display: block;
+    margin-bottom: 7px;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--text-secondary);
+  }
+
+  .sr-select {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  /* 玻璃凹槽输入框 */
+  .field-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+
+  .field-icon {
+    position: absolute;
+    left: 13px;
+    width: 16px;
+    height: 16px;
+    color: var(--text-tertiary);
+    pointer-events: none;
+    transition: color 180ms var(--ease-spatial);
+  }
+
+  .field-wrap:focus-within .field-icon {
+    color: var(--accent-text);
+  }
+
+  input {
+    width: 100%;
+    height: 42px;
+    padding: 0 13px 0 38px;
+    margin: 0;
+    border: 1px solid var(--input-border);
+    border-radius: 12px;
+    background: var(--input-bg);
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 14px;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    transition:
+      border-color 180ms var(--ease-spatial),
+      background-color 180ms var(--ease-spatial),
+      box-shadow 180ms var(--ease-spatial);
+  }
+
+  input::placeholder {
+    color: var(--text-placeholder);
+  }
+
+  input:hover:not(:disabled) {
+    border-color: var(--input-border-hover);
+    background: var(--input-bg-hover);
+  }
+
+  input:focus {
+    outline: none;
+    border-color: var(--accent);
+    background: var(--input-bg-focus);
+    box-shadow: 0 0 0 3px var(--accent-ring);
+  }
+
+  #password {
+    padding-right: 40px;
+  }
+
+  .pwd-toggle {
+    position: absolute;
+    right: 6px;
+    width: 32px;
+    height: 32px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-tertiary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 0;
+    transition: color 160ms ease, background-color 160ms ease;
+  }
+
+  .pwd-toggle:hover {
+    color: var(--text-primary);
+    background: var(--option-hover);
+  }
+
+  .pwd-toggle:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  /* 自定义 Liquid Glass 业务环境选择器（彻底替代难看的系统原生 select 弹窗） */
+  .env-trigger {
+    width: 100%;
+    height: 42px;
+    padding: 0 13px;
+    border: 1px solid var(--input-border);
+    border-radius: 12px;
+    background: var(--input-bg);
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    cursor: pointer;
+    text-align: left;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    transition:
+      border-color 180ms var(--ease-spatial),
+      background-color 180ms var(--ease-spatial),
+      box-shadow 180ms var(--ease-spatial);
+  }
+
+  .env-trigger:hover:not(:disabled) {
+    border-color: var(--input-border-hover);
+    background: var(--input-bg-hover);
+  }
+
+  .env-trigger:focus-visible,
+  .env-trigger[aria-expanded="true"] {
+    outline: none;
+    border-color: var(--accent);
+    background: var(--input-bg-focus);
+    box-shadow: 0 0 0 3px var(--accent-ring);
+  }
+
+  .env-trigger:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .env-trigger-main {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .env-trigger-icon {
+    width: 16px;
+    height: 16px;
+    color: var(--accent-text);
+    flex: none;
+  }
+
+  .env-trigger-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .env-chevron {
+    width: 16px;
+    height: 16px;
+    color: var(--text-tertiary);
+    flex: none;
+    transition: transform 200ms var(--ease-spring), color 180ms ease;
+  }
+
+  .env-trigger[aria-expanded="true"] .env-chevron {
+    transform: rotate(180deg);
+    color: var(--accent-text);
+  }
+
+  .env-listbox {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: calc(100% + 7px);
+    padding: 6px;
+    border-radius: 16px;
+    border: 1px solid var(--glass-border-strong);
+    background: var(--glass-popover-bg);
+    backdrop-filter: blur(26px) saturate(185%);
+    -webkit-backdrop-filter: blur(26px) saturate(185%);
+    box-shadow:
+      inset 0 1px 0 var(--glass-rim-top),
+      var(--popover-shadow);
+    max-height: 240px;
+    overflow-y: auto;
+    z-index: 30;
+    animation: popover-in 180ms var(--ease-spring);
+    transform-origin: top center;
+  }
+
+  .env-listbox[hidden] {
+    display: none;
+  }
+
+  @keyframes popover-in {
+    from { opacity: 0; transform: translateY(-4px) scale(0.985); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+
+  .env-option {
+    width: 100%;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    padding: 9px 11px;
+    background: transparent;
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 13.5px;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    cursor: pointer;
+    text-align: left;
+    transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+  }
+
+  .env-option + .env-option {
+    margin-top: 2px;
+  }
+
+  .env-option:hover,
+  .env-option:focus-visible {
+    outline: none;
+    background: var(--option-hover);
+  }
+
+  .env-option[aria-selected="true"] {
+    background: var(--option-active-bg);
+    border-color: var(--glass-border-strong);
+    color: var(--accent-text);
+  }
+
+  .env-option-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .env-check {
+    width: 15px;
+    height: 15px;
+    flex: none;
+    opacity: 0;
+    color: var(--accent-text);
+  }
+
+  .env-option[aria-selected="true"] .env-check {
+    opacity: 1;
+  }
+
+  /* 验证码胶囊 */
+  .captcha-row {
+    display: flex;
+    gap: 10px;
+    align-items: stretch;
+  }
+
+  .captcha-row .field-wrap {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .captcha-frame {
+    position: relative;
+    width: 132px;
+    height: 42px;
+    border-radius: 12px;
+    border: 1px solid var(--input-border);
+    background: #ffffff;
+    overflow: hidden;
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.06);
+    transition:
+      border-color 180ms var(--ease-spatial),
+      transform 200ms var(--ease-spring),
+      box-shadow 180ms var(--ease-spatial);
+  }
+
+  .captcha-frame:hover {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-ring);
+  }
+
+  .captcha-frame[data-loading="true"]::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, var(--shimmer-a) 25%, var(--shimmer-b) 50%, var(--shimmer-a) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.2s ease-in-out infinite;
+    pointer-events: none;
+  }
+
+  @keyframes shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+
+  #captcha {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    cursor: pointer;
+    border: 0;
+    background: #ffffff;
+  }
+
+  #captcha:not([src]) {
+    opacity: 0;
+  }
+
+  .captcha-hint {
+    position: absolute;
+    right: 4px;
+    bottom: 4px;
+    width: 18px;
+    height: 18px;
+    border-radius: 6px;
+    background: rgba(15, 23, 42, 0.56);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 160ms ease;
+  }
+
+  .captcha-frame:hover .captcha-hint {
+    opacity: 1;
+  }
+
+  /* Dify Blue Glass 主提交按钮 */
+  #submit {
+    position: relative;
+    width: 100%;
+    height: 44px;
+    margin-top: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.20);
+    border-radius: 12px;
+    background: linear-gradient(135deg, #2d73ff 0%, #155aef 55%, #003ee6 100%);
+    color: #ffffff;
+    font-family: inherit;
+    font-size: 14.5px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.36),
+      0 10px 24px -8px rgba(21, 90, 239, 0.62);
+    transition:
+      transform 220ms var(--ease-spring),
+      box-shadow 220ms var(--ease-spatial),
+      filter 180ms ease,
+      opacity 180ms ease;
+  }
+
+  #submit:hover:not(:disabled) {
+    transform: translateY(-1px);
+    filter: brightness(1.06);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.44),
+      0 14px 28px -8px rgba(21, 90, 239, 0.72);
+  }
+
+  #submit:active:not(:disabled) {
+    transform: translateY(0) scale(0.99);
+  }
+
+  #submit:focus-visible {
+    outline: none;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.36),
+      0 0 0 3px var(--accent-ring),
+      0 10px 24px -8px rgba(21, 90, 239, 0.62);
+  }
+
+  #submit:disabled {
+    opacity: 0.56;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  }
+
+  #submit[data-loading="true"]::before {
+    content: "";
+    width: 14px;
+    height: 14px;
+    border-radius: 9999px;
+    border: 2px solid rgba(255, 255, 255, 0.35);
+    border-top-color: #ffffff;
+    animation: spin 700ms linear infinite;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  /* 底部安全提示 */
+  .footer-note {
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--divider);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    font-size: 11.5px;
+    color: var(--text-tertiary);
+    text-align: center;
+  }
+
+  .footer-note svg {
+    width: 13px;
+    height: 13px;
+    color: var(--accent-text);
+    flex: none;
+  }
+
+  @media (max-width: 440px) {
+    .card { padding: 26px 20px 22px; border-radius: 20px; }
+    .captcha-frame { width: 118px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .card, .card-sheen::before, input, .env-trigger, .env-chevron,
+    .env-listbox, .captcha-frame, #submit {
+      transition: none !important;
+      animation: none !important;
+      transform: none !important;
+    }
+  }
 </style>
 </head>
 <body>
-<main class="card">
-  <h1>AI-Ops 智能体控制台</h1>
-  <p class="sub">请用公司账号登录</p>
+<svg class="lg-svg-defs" aria-hidden="true" width="0" height="0">
+  <defs>
+    <filter id="aiops-login-lens" x="-4%" y="-4%" width="108%" height="108%" color-interpolation-filters="sRGB">
+      <feTurbulence type="fractalNoise" baseFrequency="0.011 0.014" numOctaves="2" seed="7" result="LG_NOISE" />
+      <feGaussianBlur in="LG_NOISE" stdDeviation="3.5" result="LG_SMOOTH" />
+      <feDisplacementMap in="SourceGraphic" in2="LG_SMOOTH" scale="3.5" xChannelSelector="R" yChannelSelector="G" />
+    </filter>
+  </defs>
+</svg>
 
-  <div id="error" role="alert"></div>
+<div class="shell">
+  <main class="card" id="login-card">
+    <div class="card-sheen" aria-hidden="true"></div>
+    <div class="card-inner">
+      <div class="brand-row">
+        <div class="brand-badge" aria-hidden="true">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z" />
+            <path d="M12 12l8-4.5" />
+            <path d="M12 12v9" />
+            <path d="M12 12L4 7.5" />
+          </svg>
+        </div>
+        <span class="status-pill">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span>统一身份认证</span>
+        </span>
+      </div>
 
-  <form id="form" autocomplete="on">
-    <div id="environment-row" hidden>
-      <label for="environment">业务环境</label>
-      <select id="environment" name="environment" required></select>
+      <h1>AI-Ops 智能体控制台</h1>
+      <p class="sub">请用公司账号登录，进入所属业务环境工作台</p>
+
+      <div id="error" role="alert"></div>
+
+      <form id="form" autocomplete="on">
+        <div id="environment-row" hidden>
+          <label for="environment" id="env-label">业务环境</label>
+          <select id="environment" name="environment" required class="sr-select" tabindex="-1" aria-hidden="true"></select>
+          <button
+            type="button"
+            id="env-trigger"
+            class="env-trigger"
+            role="combobox"
+            aria-labelledby="env-label env-trigger-text"
+            aria-haspopup="listbox"
+            aria-expanded="false"
+            aria-controls="env-listbox"
+          >
+            <span class="env-trigger-main">
+              <svg class="env-trigger-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="4" width="18" height="6" rx="2" />
+                <rect x="3" y="14" width="18" height="6" rx="2" />
+                <line x1="7" y1="7" x2="7.01" y2="7" />
+                <line x1="7" y1="17" x2="7.01" y2="17" />
+              </svg>
+              <span id="env-trigger-text" class="env-trigger-text">正在加载业务环境…</span>
+            </span>
+            <svg class="env-chevron" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </button>
+          <div id="env-listbox" class="env-listbox" role="listbox" aria-labelledby="env-label" hidden></div>
+        </div>
+
+        <div class="field">
+          <label for="username">公司账号</label>
+          <div class="field-wrap">
+            <svg class="field-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+              <circle cx="12" cy="7" r="4" />
+            </svg>
+            <input id="username" name="username" type="text" autocomplete="username"
+                   placeholder="请输入公司账号" autocapitalize="off" autocorrect="off"
+                   spellcheck="false" required>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="password">密码</label>
+          <div class="field-wrap">
+            <svg class="field-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="4" y="11" width="16" height="10" rx="2.5" />
+              <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+            </svg>
+            <input id="password" name="password" type="password" autocomplete="current-password"
+                   placeholder="请输入登录密码" required>
+            <button type="button" id="toggle-pwd" class="pwd-toggle" aria-label="显示密码" aria-pressed="false">
+              <svg id="eye-open" width="16" height="16" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+              <svg id="eye-closed" width="16" height="16" aria-hidden="true" hidden viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M17.94 17.94A10.94 10.94 0 0 1 12 19c-6.5 0-10-7-10-7a19.77 19.77 0 0 1 5.06-5.94" />
+                <path d="M9.9 4.24A10.94 10.94 0 0 1 12 4c6.5 0 10 7 10 7a19.77 19.77 0 0 1-2.66 3.74" />
+                <line x1="2" y1="2" x2="22" y2="22" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="code">验证码</label>
+          <div class="captcha-row">
+            <div class="field-wrap">
+              <svg class="field-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 2l7 4v5c0 5-3.5 9-7 11-3.5-2-7-6-7-11V6l7-4z" />
+                <path d="M9.5 12l2 2 3.5-4" />
+              </svg>
+              <input id="code" name="code" type="text" inputmode="text" autocomplete="off"
+                     placeholder="图形验证码" autocapitalize="off" autocorrect="off"
+                     spellcheck="false" required>
+            </div>
+            <div class="captcha-frame" id="captcha-frame" data-loading="true">
+              <img id="captcha" alt="点击刷新验证码" title="点击刷新">
+              <span class="captcha-hint" aria-hidden="true">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                  <polyline points="21 3 21 9 15 9" />
+                </svg>
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <button id="submit" type="submit">登录</button>
+      </form>
+
+      <div class="footer-note">
+        <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2l7 4v5c0 5-3.5 9-7 11-3.5-2-7-6-7-11V6l7-4z" />
+        </svg>
+        <span>TLS 加密传输 · 凭据零前端落盘 · 环境会话隔离</span>
+      </div>
     </div>
-    <label for="username">公司账号</label>
-    <input id="username" name="username" type="text" autocomplete="username"
-           autocapitalize="off" autocorrect="off" spellcheck="false" required>
-
-    <label for="password">密码</label>
-    <input id="password" name="password" type="password" autocomplete="current-password" required>
-
-    <label for="code">验证码</label>
-    <div class="captcha-row">
-      <input id="code" name="code" type="text" inputmode="text" autocomplete="off"
-             autocapitalize="off" autocorrect="off" spellcheck="false" required>
-      <img id="captcha" alt="点击刷新验证码" title="点击刷新">
-    </div>
-
-    <button id="submit" type="submit">登录</button>
-  </form>
-</main>
+  </main>
+</div>
 
 <script>
 (function () {
   "use strict";
 
+  var card = document.getElementById("login-card");
   var form = document.getElementById("form");
   var errorBox = document.getElementById("error");
   var captcha = document.getElementById("captcha");
+  var captchaFrame = document.getElementById("captcha-frame");
   var button = document.getElementById("submit");
   var randomStr = "";
   var environment = document.getElementById("environment");
+  var envTrigger = document.getElementById("env-trigger");
+  var envTriggerText = document.getElementById("env-trigger-text");
+  var envListbox = document.getElementById("env-listbox");
+  var passwordInput = document.getElementById("password");
+  var togglePwd = document.getElementById("toggle-pwd");
+  var eyeOpen = document.getElementById("eye-open");
+  var eyeClosed = document.getElementById("eye-closed");
   var captchaRequest = 0;
   var submitting = false;
+  var envRows = [];
+
+  // Chromium 光学折射按能力渐进增强；Safari / Firefox 保留流畅磨砂玻璃
+  var ua = (navigator.userAgent || "").toLowerCase();
+  var reducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (!reducedMotion && ua.indexOf("firefox") === -1 && (ua.indexOf("chrome/") !== -1 || ua.indexOf("edg/") !== -1)) {
+    document.documentElement.setAttribute("data-refract", "on");
+  }
+
+  // 光标跟随镜面高光（仅更新 CSS 变量，不触发布局重排）
+  var sheenRaf = null;
+  card.addEventListener("pointermove", function (e) {
+    if (reducedMotion) return;
+    var rect = card.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    var px = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
+    var py = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100));
+    if (sheenRaf !== null) cancelAnimationFrame(sheenRaf);
+    sheenRaf = requestAnimationFrame(function () {
+      card.style.setProperty("--lg-mx", px.toFixed(1) + "%");
+      card.style.setProperty("--lg-my", py.toFixed(1) + "%");
+      card.style.setProperty("--lg-glow", "1");
+    });
+  });
+  card.addEventListener("pointerleave", function () {
+    if (sheenRaf !== null) cancelAnimationFrame(sheenRaf);
+    card.style.setProperty("--lg-glow", "0");
+  });
+
+  // 密码显隐切换
+  togglePwd.addEventListener("click", function () {
+    var show = passwordInput.type === "password";
+    passwordInput.type = show ? "text" : "password";
+    togglePwd.setAttribute("aria-label", show ? "隐藏密码" : "显示密码");
+    togglePwd.setAttribute("aria-pressed", show ? "true" : "false");
+    eyeOpen.hidden = show;
+    eyeClosed.hidden = !show;
+  });
 
   function showError(message) {
     errorBox.textContent = message;
@@ -123,6 +1015,121 @@
     errorBox.style.display = "none";
   }
 
+  function closeEnvList() {
+    envListbox.hidden = true;
+    envTrigger.setAttribute("aria-expanded", "false");
+  }
+
+  function openEnvList() {
+    if (envTrigger.disabled || !envRows.length) return;
+    envListbox.hidden = false;
+    envTrigger.setAttribute("aria-expanded", "true");
+  }
+
+  function syncEnvUI() {
+    var selectedRow = null;
+    for (var i = 0; i < envRows.length; i++) {
+      if (envRows[i].id === environment.value) {
+        selectedRow = envRows[i];
+        break;
+      }
+    }
+    envTriggerText.textContent = selectedRow ? selectedRow.name : "请选择业务环境";
+    var items = envListbox.querySelectorAll(".env-option");
+    for (var j = 0; j < items.length; j++) {
+      var isSelected = items[j].getAttribute("data-value") === environment.value;
+      items[j].setAttribute("aria-selected", isSelected ? "true" : "false");
+    }
+  }
+
+  function selectEnvironment(id) {
+    var changed = environment.value !== id;
+    environment.value = id;
+    syncEnvUI();
+    closeEnvList();
+    envTrigger.focus();
+    if (changed) {
+      environment.dispatchEvent(new Event("change"));
+    }
+  }
+
+  function renderEnvOptions() {
+    envListbox.textContent = "";
+    envRows.forEach(function (row) {
+      var item = document.createElement("button");
+      item.type = "button";
+      item.className = "env-option";
+      item.setAttribute("role", "option");
+      item.setAttribute("data-value", row.id);
+      item.setAttribute("aria-selected", row.id === environment.value ? "true" : "false");
+
+      var labelSpan = document.createElement("span");
+      labelSpan.className = "env-option-label";
+      labelSpan.textContent = row.name;
+      item.appendChild(labelSpan);
+
+      var ns = "http://www.w3.org/2000/svg";
+      var checkSvg = document.createElementNS(ns, "svg");
+      checkSvg.setAttribute("class", "env-check");
+      checkSvg.setAttribute("aria-hidden", "true");
+      checkSvg.setAttribute("viewBox", "0 0 24 24");
+      checkSvg.setAttribute("fill", "none");
+      checkSvg.setAttribute("stroke", "currentColor");
+      checkSvg.setAttribute("stroke-width", "2.4");
+      checkSvg.setAttribute("stroke-linecap", "round");
+      checkSvg.setAttribute("stroke-linejoin", "round");
+      var poly = document.createElementNS(ns, "polyline");
+      poly.setAttribute("points", "20 6 9 17 4 12");
+      checkSvg.appendChild(poly);
+      item.appendChild(checkSvg);
+
+      item.addEventListener("click", function () {
+        selectEnvironment(row.id);
+      });
+      envListbox.appendChild(item);
+    });
+    syncEnvUI();
+  }
+
+  envTrigger.addEventListener("click", function () {
+    if (envListbox.hidden) openEnvList();
+    else closeEnvList();
+  });
+
+  envTrigger.addEventListener("keydown", function (e) {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!envRows.length) return;
+      var idx = -1;
+      for (var i = 0; i < envRows.length; i++) {
+        if (envRows[i].id === environment.value) { idx = i; break; }
+      }
+      var nextIdx = e.key === "ArrowDown"
+        ? (idx + 1) % envRows.length
+        : (idx - 1 + envRows.length) % envRows.length;
+      if (envListbox.hidden) {
+        openEnvList();
+      } else {
+        selectEnvironment(envRows[nextIdx].id);
+      }
+    } else if (e.key === "Escape") {
+      closeEnvList();
+    }
+  });
+
+  document.addEventListener("click", function (e) {
+    if (!envListbox.hidden && !document.getElementById("environment-row").contains(e.target)) {
+      closeEnvList();
+    }
+  });
+
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && !envListbox.hidden) {
+      closeEnvList();
+      envTrigger.focus();
+    }
+  });
+
   // 换一个 randomStr 再重设 src ⇒ 公司那边出一张新图。没有缓存参数的必要：
   // randomStr 本身就不同，URL 已经变了。
   function refreshCaptcha() {
@@ -130,6 +1137,7 @@
     var request = ++captchaRequest;
     var pending = new Image();
     randomStr = "";
+    captchaFrame.setAttribute("data-loading", "true");
     var bytes = new Uint8Array(16);
     (window.crypto || window.msCrypto).getRandomValues(bytes);
     var nonce = Array.prototype.map
@@ -138,13 +1146,21 @@
     var selected = environment.value;
     pending.onload = function () {
       if (request !== captchaRequest) return;
-      pending.id = "captcha"; pending.alt = captcha.alt; pending.title = captcha.title;
+      pending.id = "captcha";
+      pending.alt = captcha.alt;
+      pending.title = captcha.title;
       pending.addEventListener("click", refreshCaptcha);
-      captcha.replaceWith(pending); captcha = pending;
-      randomStr = nonce; button.disabled = false;
+      captcha.replaceWith(pending);
+      captcha = pending;
+      captchaFrame.removeAttribute("data-loading");
+      randomStr = nonce;
+      button.disabled = false;
     };
     pending.onerror = function () {
-      if (request === captchaRequest) showError("验证码加载失败，请重新获取");
+      if (request === captchaRequest) {
+        captchaFrame.removeAttribute("data-loading");
+        showError("验证码加载失败，请重新获取");
+      }
     };
     button.disabled = true;
     pending.src = "/__aiops/login/captcha?randomStr=" + nonce + "&environment=" + encodeURIComponent(selected);
@@ -152,34 +1168,47 @@
 
   captcha.addEventListener("click", refreshCaptcha);
   environment.addEventListener("change", function () {
+    syncEnvUI();
     document.getElementById("code").value = "";
     clearError();
     refreshCaptcha();
   });
+
   button.disabled = true;
   fetch("/__aiops/login/environments", { credentials: "same-origin" })
     .then(function (response) { if (!response.ok) throw new Error(); return response.json(); })
     .then(function (data) {
       if (!data.environments || !data.environments.length) throw new Error();
       var preferred = new URLSearchParams(window.location.search).get("environment") || "";
+      envRows = data.environments.slice();
       data.environments.forEach(function (row) {
-        var option = document.createElement("option"); option.value = row.id; option.textContent = row.name;
+        var option = document.createElement("option");
+        option.value = row.id;
+        option.textContent = row.name;
         environment.appendChild(option);
       });
       if (preferred && data.environments.some(function (row) { return row.id === preferred; })) {
         environment.value = preferred;
       }
+      renderEnvOptions();
       document.getElementById("environment-row").hidden = !data.selection_required;
       refreshCaptcha();
-    }).catch(function () { showError("登录环境尚未准备好，请联系管理员"); });
+    })
+    .catch(function () {
+      captchaFrame.removeAttribute("data-loading");
+      showError("登录环境尚未准备好，请联系管理员");
+    });
 
   form.addEventListener("submit", function (event) {
     event.preventDefault();
     if (submitting || !randomStr || button.disabled) return;
     submitting = true;
+    closeEnvList();
     environment.disabled = true;
+    envTrigger.disabled = true;
     clearError();
     button.disabled = true;
+    button.setAttribute("data-loading", "true");
     button.textContent = "登录中…";
 
     var searchParams = new URLSearchParams(window.location.search);
@@ -212,14 +1241,20 @@
         }
         // 服务端给的是一句面向运营的中文原因；**不在这里拼装或翻译**。
         showError((result.data && result.data.reason) || "登录未完成，请稍后重试");
-        submitting = false; environment.disabled = false;
+        submitting = false;
+        environment.disabled = false;
+        envTrigger.disabled = false;
+        button.removeAttribute("data-loading");
         refreshCaptcha();
         document.getElementById("code").value = "";
         button.textContent = "登录";
       })
       .catch(function () {
         showError("无法连接登录服务，请稍后重试");
-        submitting = false; environment.disabled = false;
+        submitting = false;
+        environment.disabled = false;
+        envTrigger.disabled = false;
+        button.removeAttribute("data-loading");
         refreshCaptcha();
         button.textContent = "登录";
       });
