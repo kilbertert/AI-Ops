@@ -1,3 +1,4 @@
+# ⚠️ 试验验收栈 `m2-live-03` 专用镜像（Python 3.13）；正式生产客户机镜像见 `ops/environments/gateway/Dockerfile`。
 # 隔离 Gateway 的可部署镜像：**启动不下载、不解析依赖**。
 #
 # 依赖来自 `gateway-requirements.txt`（由 `uv export --frozen` 从 `uv.lock` 生成，

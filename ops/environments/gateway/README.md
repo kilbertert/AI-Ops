@@ -8,33 +8,29 @@
 目标模块向共享平台派发的反方向见[共享执行入口](execution-ingress.md)，与工具回调分别验证。
 持久独立实例的冷安装、重复执行与同schema恢复见[受管安装](install.md)，不从预演状态直接切业务流量。
 
-## OCI 容器镜像分发（ADR-0363，推荐主路线）
+## OCI 容器镜像分发（ADR-0363，唯一主路线）
 
-对于已安装 Docker 的客户机与 Day-2「版本与发版」零命令行升级，优先通过 **阿里云 ACR 不可变容器镜像** 分发，不再跨海传输整包 `application-*.tar.gz`：
+所有新客户机冷装与 Day-2「版本与发版」升级回滚均统一走 **公司阿里云企业版 ACR 不可变容器镜像（`@sha256`）**：
 
-1. **手动或 CI 构建并验证镜像**（`linux/amd64`，依赖层与自研代码层分离）：
+1. **统一发布脚本构建推送**（日常由 `cd.yml` 自动调用；人工补发可跑 `release-gateway-image.yml` 或本地脚本）：
    ```bash
-   bash ops/environments/gateway/build-image.sh \
-     --rev origin/main \
-     --repo <registry>/<namespace>/aiops-gateway \
-     --tag v1.43.21 \
-     --push \
-     --output-metadata /tmp/gateway-image.json
+   AIOPS_GATEWAY_IMAGE_REPO=qushi-registry.cn-hangzhou.cr.aliyuncs.com/release/aiops-gateway \
+   AIOPS_ACR_USERNAME=<user> \
+   bash ops/environments/gateway/publish-release-image.sh --tag v1.43.23
    ```
-   构建脚本会在推送前自动运行 `--read-only` 非 root 容器冒烟校验（核验 `aiops_diagnostics.__version__` 与提交一致），并在 `--push` 后记录不可变 `@sha256:...` 摘要到输出清单；也可由 `.github/workflows/release-gateway-image.yml` 在打正式标签时自动完成构建、推送并挂载 `gateway-image.json` 至 GitHub Release。
+   （脚本通过 `AIOPS_ACR_PASSWORD` 环境变量登录隔离 `DOCKER_CONFIG`，调用 `build-image.sh` 执行非 root `--read-only` 冒烟核验并上传 `gateway-image.json` 至 GitHub Release。）
 
-2. **在 41 控制面写入受控 Registry 拉取配置**（`0600`，严禁把密码写进命令历史或仓库）：
+2. **在 41 控制面写入受控 Registry 配置**（`0600`）：
    ```bash
    bash ops/environments/gateway/configure-registry.sh \
-     --repository <registry>/<namespace>/aiops-gateway \
-     --pull-username <acr_pull_user>
-   # 随后按提示通过 stdin 输入只读拉取口令（若目标机已预登录公司 ACR，可加 --no-pull-auth）
+     --repository qushi-registry.cn-hangzhou.cr.aliyuncs.com/release/aiops-gateway \
+     --no-pull-auth --central 41
    ```
-   客户机拉取凭据独立保存在 `/etc/aiops-access-<env>/docker-config/config.json`（`0700`/`0600`），通过 `DOCKER_CONFIG` 使用，不改动客户主机 `/root/.docker/config.json`。
+   客户机动作统一收口在纯标准库脚本 `ops/environments/gateway/host_release_agent.py`，经 SSH stdin 投递执行；容器直接由 `systemd` `EnvironmentFile=/opt/aiops-access-<env>/container.env` 托管。
 
 ---
 
-## 制品（历史兼容 offline tarball）
+## 历史离线预演制品参考（已退出日常发版主链）
 
 在开发机从已合并修订执行：
 

@@ -143,57 +143,44 @@ def render_container_env(env: str, image_ref: str, local_port: int, uid: int, gi
     )
 
 
-def render_container_launcher_script() -> str:
-    """生成 `/opt/aiops-access-<env>/run-container.sh` 启动脚本。"""
-    return "\n".join(
-        [
-            "#!/usr/bin/env bash",
-            "# AI-Ops 客户机 Gateway 不可变容器启动器（ADR-0363）。",
-            "set -euo pipefail",
-            'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
-            'source "${SCRIPT_DIR}/container.env"',
-            'CTR_NAME="aiops-access-${ENV_NAME}"',
-            '/usr/bin/docker rm -f "${CTR_NAME}" >/dev/null 2>&1 || true',
-            "exec /usr/bin/docker run --rm \\",
-            '  --name "${CTR_NAME}" \\',
-            "  --network host \\",
-            '  --user "${RUN_UID}:${RUN_GID}" \\',
-            "  --read-only \\",
-            "  --tmpfs /tmp:rw,noexec,nosuid,size=64m \\",
-            "  --security-opt no-new-privileges:true \\",
-            "  --cap-drop ALL \\",
-            "  --memory 384m \\",
-            "  --cpus 0.5 \\",
-            "  --pids-limit 64 \\",
-            '  -v "/etc/aiops-access-${ENV_NAME}:/etc/aiops-access-${ENV_NAME}:ro" \\',
-            '  -v "/var/lib/aiops-access-${ENV_NAME}:/var/lib/aiops-access-${ENV_NAME}:rw" \\',
-            "  -e LANG=C.UTF-8 \\",
-            "  -e PYTHONNOUSERSITE=1 \\",
-            '  -e "AIOPS_HOME=/var/lib/aiops-access-${ENV_NAME}" \\',
-            '  -e "AIOPS_DATA_HOME=/var/lib/aiops-access-${ENV_NAME}" \\',
-            '  -e "AIOPS_CONFIG_HOME=/var/lib/aiops-access-${ENV_NAME}/config" \\',
-            '  -e "AIOPS_CODEX_KEY_DIR=/var/lib/aiops-access-${ENV_NAME}/keys" \\',
-            '  -e "AIOPS_AGENT_RUN_ROOT=/var/lib/aiops-access-${ENV_NAME}/runs" \\',
-            '  -e "AIOPS_GATEWAY_DATABASE_FILE=/var/lib/aiops-access-${ENV_NAME}/gateway/gateway.db" \\',
-            (
-                '  -e "AIOPS_GATEWAY_CHAT_ROUTE_BINDINGS_FILE='
-                '/var/lib/aiops-access-${ENV_NAME}/gateway/gateway.db" \\'
-            ),
-            '  -e "AIOPS_GATEWAY_CHAT_DIFY_KEY_DIR=/var/lib/aiops-access-${ENV_NAME}/keys" \\',
-            '  -e "AIOPS_GATEWAY_SERVER_CONFIG_FILE=/etc/aiops-access-${ENV_NAME}/production.env" \\',
-            '  -e "AIOPS_GATEWAY_ENVIRONMENT=${ENV_NAME}" \\',
-            '  "${IMAGE_REF}" \\',
-            '  serve --host 127.0.0.1 --port "${LOCAL_PORT}"',
-            "",
-        ]
-    )
-
-
 def render_container_systemd_unit(env: str) -> str:
-    """生成托管客户机 Gateway 容器的 systemd unit 文件。"""
+    """生成直跑 Docker 容器的平铺 systemd unit（EnvironmentFile 注入，无需中间壳脚本）。"""
     env_clean = env.strip().lower()
     if not _ENV_ID_RE.fullmatch(env_clean):
         raise ContainerRegistryRefused("ENVIRONMENT_WIZARD_INVALID")
+    ctr = f"aiops-access-{env_clean}"
+    etc_dir = f"/etc/aiops-access-{env_clean}"
+    var_dir = f"/var/lib/aiops-access-{env_clean}"
+    opt_dir = f"/opt/aiops-access-{env_clean}"
+    docker_cmd = " ".join(
+        [
+            "/usr/bin/docker run --rm",
+            f"--name {ctr}",
+            "--network host",
+            "--user ${RUN_UID}:${RUN_GID}",
+            "--read-only",
+            "--tmpfs /tmp:rw,noexec,nosuid,size=64m",
+            "--security-opt no-new-privileges:true",
+            "--cap-drop ALL",
+            "--memory 384m --cpus 0.5 --pids-limit 64",
+            f"-v {etc_dir}:{etc_dir}:ro",
+            f"-v {var_dir}:{var_dir}:rw",
+            "-e LANG=C.UTF-8",
+            "-e PYTHONNOUSERSITE=1",
+            f"-e AIOPS_HOME={var_dir}",
+            f"-e AIOPS_DATA_HOME={var_dir}",
+            f"-e AIOPS_CONFIG_HOME={var_dir}/config",
+            f"-e AIOPS_CODEX_KEY_DIR={var_dir}/keys",
+            f"-e AIOPS_AGENT_RUN_ROOT={var_dir}/runs",
+            f"-e AIOPS_GATEWAY_DATABASE_FILE={var_dir}/gateway/gateway.db",
+            f"-e AIOPS_GATEWAY_CHAT_ROUTE_BINDINGS_FILE={var_dir}/gateway/gateway.db",
+            f"-e AIOPS_GATEWAY_CHAT_DIFY_KEY_DIR={var_dir}/keys",
+            f"-e AIOPS_GATEWAY_SERVER_CONFIG_FILE={etc_dir}/production.env",
+            f"-e AIOPS_GATEWAY_ENVIRONMENT={env_clean}",
+            "${IMAGE_REF}",
+            "serve --host 127.0.0.1 --port ${LOCAL_PORT}",
+        ]
+    )
     return "\n".join(
         [
             "[Unit]",
@@ -203,8 +190,10 @@ def render_container_systemd_unit(env: str) -> str:
             "Requires=docker.service",
             "",
             "[Service]",
-            f"ExecStart=/opt/aiops-access-{env_clean}/run-container.sh",
-            f"ExecStop=/usr/bin/docker stop -t 15 aiops-access-{env_clean}",
+            f"EnvironmentFile={opt_dir}/container.env",
+            f"ExecStartPre=-/usr/bin/docker rm -f {ctr}",
+            f"ExecStart={docker_cmd}",
+            f"ExecStop=/usr/bin/docker stop -t 15 {ctr}",
             "Restart=on-failure",
             "RestartSec=3",
             "TimeoutStopSec=25",
@@ -240,26 +229,6 @@ def sanitize_image_descriptor(raw: Any) -> dict[str, Any] | None:
         "image_tag": str(raw.get("image_tag") or tag),
         "ingress_sha256": str(raw.get("ingress_sha256") or ""),
     }
-
-
-def parse_image_catalog_file(path: Path) -> dict[str, dict[str, Any]]:
-    """读取可选控制面 `image-catalog.json` 并按 revision 索引已验证镜像条目。"""
-    if not path.is_file():
-        return {}
-    validate_private_file(path)
-    try:
-        body = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return {}
-    entries = body.get("entries") if isinstance(body, dict) else body
-    if not isinstance(entries, list):
-        return {}
-    by_rev: dict[str, dict[str, Any]] = {}
-    for item in entries:
-        clean = sanitize_image_descriptor(item)
-        if clean and clean.get("revision"):
-            by_rev[clean["revision"]] = clean
-    return by_rev
 
 
 def _resolve_github_repo_slug(repo_root: Path) -> str:

@@ -13,33 +13,26 @@ ADR-0361 收口了已上线客户环境的版本选择、受控 Nginx 入口对�
 
 ## 决定
 
-1. **采用 OCI 标准容器镜像分发 + 不可变 Digest 锁定（`@sha256:...`）**
-   - 官方发布工作流（`.github/workflows/release-gateway-image.yml`）在推送或触发 `origin/main` 注释标签 `vX.Y.Z` 时自动构建 `linux/amd64` Docker 镜像，执行非 root 只读冒烟核验（确认 `aiops_diagnostics.__version__` 与提交一致且可执行），推送至国内阿里云 ACR，并将不可变 `@sha256:...` 摘要清单 `gateway-image.json` 挂载至对应 GitHub Release。
-   - 控制面 `release-catalog.json` 与客户机执行引擎严格校验 `@sha256:[0-9a-f]{64}` 摘要引用，禁止 `:latest` 或仅凭漂移 tag 名拉取部署。
+1. **采用 OCI 标准容器镜像分发 + 不可变 Digest 锁定（`@sha256:...`）+ 单一发布入口**
+   - 统一由 [`ops/environments/gateway/publish-release-image.sh`](../../ops/environments/gateway/publish-release-image.sh) 负责构建、非 root 只读冒烟校验、推送至公司阿里云 ACR 并挂载 `gateway-image.json` 至 GitHub Release；日常 [`.github/workflows/cd.yml`](../../.github/workflows/cd.yml) 与人工补发 [`.github/workflows/release-gateway-image.yml`](../../.github/workflows/release-gateway-image.yml) 共用同一脚本。
+   - 镜像元数据唯一真源为 GitHub Release 附件 `gateway-image.json`（同步写入 `41` 的 `release-catalog.json`），严格校验 `@sha256:[0-9a-f]{64}`。
 
-2. **独立阿里云 ACR 先行，凭单配置无缝切入公司 ACR**
+2. **直接启用公司 ACR，凭单配置保留迁移能力**
    - 通过配置抽象解耦镜像仓地址与拉取凭据：CI 侧读取仓库变量 `AIOPS_GATEWAY_IMAGE_REPO` 与机密 `AIOPS_ACR_USERNAME` / `AIOPS_ACR_PASSWORD`；控制面 `41` 侧读取 `0600` 私有账本 `/var/lib/aiops-41/onboarding-assets/registry-config.json`（由 `ops/environments/gateway/configure-registry.sh` 安全写入，明文密码永不进入仓库、命令行参数或管理面 API）。
-   - 直接启用公司企业版 ACR `qushi-registry.cn-hangzhou.cr.aliyuncs.com/release/aiops-gateway`（依托已开通的受控 RAM 推送账号及客户机既有公司 ACR 预登录态），并保留后续凭单配置切换到任意合规国内 ACR 的零代码迁移能力。
-   - **隔离客户机既有 Docker 认证**：当 AI-Ops 需要独立拉取凭据时，仅写入 `/etc/aiops-access-<env>/docker-config/config.json`（目录 `0700`、文件 `0600`、`root` 拥有），通过 `DOCKER_CONFIG` 环境变量注入；**严禁覆盖客户机 `/root/.docker/config.json`**（保留客户既有公司 ACR 认证）。
+   - 直接启用公司企业版 ACR `qushi-registry.cn-hangzhou.cr.aliyuncs.com/release/aiops-gateway`（依托受控 RAM 推送账号及客户机既有公司 ACR 预登录态），若配置了独立拉取凭证则隔离写入 `/etc/aiops-access-<env>/docker-config/config.json`（绝不触碰 `/root/.docker/config.json`）。
 
-3. **两层缓存友好镜像（常规升级增量 ~400 KB）**
-   - `ops/environments/gateway/Dockerfile` 基于 `python:3.12-slim` 在 `/opt/aiops/venv` 构建两层产物：
-     - **依赖底座层**：由 `uv export --frozen --no-dev --no-editable --no-emit-project` 安装锁定的第三方 wheel；`uv.lock` 不变时跨版本完全复用。
-     - **自研应用层**：安装带 `<VERSION>+<rev12>` 的 `aiops_diagnostics` wheel（~400 KB），升级时客户机仅拉取此小层与 Nginx 模板（`< 3 KB`）。
-   - 统一执行 `chmod -R a+rX /opt/aiops`，确保容器以项目专属非 root 数字 UID/GID 运行在只读根文件系统下。
+3. **两层缓存友好镜像（常规升级仅拉自研小层）**
+   - `ops/environments/gateway/Dockerfile` 基于 `python:3.12-slim` 在 `/opt/aiops/venv` 构建两层产物：依赖底座层（锁定第三方 wheel）与自研 `aiops_diagnostics` 应用层。
 
-4. **宿主兼容容器运行契约（`systemd` 托管 + 零配置改动）**
-   - 保留 `aiops-access-<env>.service` 作为宿主唯一起停控制边界，托管 `/opt/aiops-access-<env>/run-container.sh` 启动的单容器 `aiops-access-<env>`：
-     - `--network host`（与原裸进程完全一致：继续监听 `127.0.0.1:<port>` 并直连宿主 Nginx、`127.0.0.1` Redis/`tsdata` 与内网 MySQL，无需修改 `production.env`）；
-     - `--user <uid>:<gid>`（使用既有 `aiops-access-<env>` 数字 UID/GID，延续原有 `0600`/`0700` 文件属主与权限边界）；
-     - 只读加固：`--read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m --security-opt no-new-privileges:true --cap-drop ALL --memory 384m --cpus 0.5 --pids-limit 64`；
+4. **平铺直跑的宿主容器契约（去掉中间壳脚本 + 零配置改动）**
+   - `aiops-access-<env>.service` 通过 `EnvironmentFile=/opt/aiops-access-<env>/container.env` 直接调用 `/usr/bin/docker run` 启动单容器（去掉 `run-container.sh` 转接层，运维执行 `systemctl cat` 一屏可见完整参数）：
+     - `--network host`、`--user <uid>:<gid>`、`--read-only`、`--tmpfs /tmp:rw,noexec,nosuid,size=64m`、`--security-opt no-new-privileges:true`、`--cap-drop ALL`、`--memory 384m --cpus 0.5 --pids-limit 64`；
      - 挂载只读配置 `/etc/aiops-access-<env>:/etc/aiops-access-<env>:ro` 与可写数据卷 `/var/lib/aiops-access-<env>:/var/lib/aiops-access-<env>:rw`。
-   - 新客户 `infra_provision` 冷装在目标机存在 Docker 且最新官方版已发布 OCI 镜像时，直接走容器原生冷装（不再跨海传 24 MiB 包）；存量 `venv` 客户机（如 `jiejia`）升级到含 OCI 镜像的新版本时原地平滑切换为容器态。
+   - 客户机操作抽离至纯标准库脚本 [`ops/environments/gateway/host_release_agent.py`](../../ops/environments/gateway/host_release_agent.py)，经 SSH stdin 投递执行，控制面编排独立收口在 [`src/aiops_diagnostics/onboarding/release_worker.py`](../../src/aiops_diagnostics/onboarding/release_worker.py)。
 
-5. **双向兼容的原子回滚与零触碰核验**
-   - 升级继续执行 `production.env`、`registry/environment.json` 与 `nginx-user-ingress-auth.conf` 前后 SHA-256 零触碰校验（`untouched_config_verified: true`）以及受控 Nginx 入口对比同步。
-   - 若升级后本地 `/health`（`ok: true`、精确版本、`business_mutations: disabled`）或零触碰检查失败，自动恢复原容器 `container.env`（`docker -> docker`）或原 `venv` systemd 单元（`venv -> docker`）及 Nginx 备份。
-   - 手动一键 `environment_rollback` 支持 `docker -> docker`、`docker -> venv` 与存量 `venv -> venv`。
+5. **全线单轨容器冷装、升级与回滚（正式退役 `venv` 跨海整包分支）**
+   - 在 `jiejia` 完成 `v1.43.22` 容器切换后，新客户冷装、`environment_upgrade` 与 `environment_rollback` 均只支持 OCI `@sha256` 容器轨道，不再保留 24 MiB 跨海 `tar.gz` 与 `venv ↔ docker` 双轨分支。
+   - 升级继续执行 `production.env`、`registry/environment.json` 与 `nginx-user-ingress-auth.conf` 前后 SHA-256 零触碰校验与 Nginx 同步，任何异常自动原子回退至上一容器镜像摘要与 Nginx 备份。
 
 ## 替代方案
 

@@ -1,22 +1,12 @@
-name: Release Gateway OCI Image
+name: Release Gateway OCI Image (Backfill)
 
-# 当 main 上发布正式注释标签（vX.Y.Z）或人工补发时，一次性构建 linux/amd64 两层镜像并推送到国内阿里云 ACR，
-# 同时将包含不可变 @sha256 摘要的 gateway-image.json 挂载到对应 GitHub Release，供客户机就近秒拉。
+# 手动补发/切仓重推指定官方正式标签（vX.Y.Z）的客户机 Gateway OCI 镜像；日常 CD 由 cd.yml 自动调用同脚本。
 
 on:
-  push:
-    tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'
   workflow_dispatch:
     inputs:
       target_tag:
-        description: "已发布的 SemVer 注释标签（例如 v1.43.21），用于补发或切换镜像仓后重推"
-        required: true
-        type: string
-  workflow_call:
-    inputs:
-      target_tag:
-        description: "由 CD 工作流传入的官方注释标签（例如 v1.43.21）"
+        description: "已发布的 SemVer 注释标签（例如 v1.43.22）"
         required: true
         type: string
 
@@ -24,7 +14,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: gateway-oci-release-${{ github.ref }}
+  group: gateway-oci-backfill-${{ inputs.target_tag }}
   cancel-in-progress: false
 
 jobs:
@@ -38,147 +28,17 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Check ACR configuration and resolve target tag
-        id: meta
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          REF_NAME: ${{ github.ref_name }}
-          INPUT_TAG: ${{ inputs.target_tag }}
-          IMAGE_REPO: ${{ vars.AIOPS_GATEWAY_IMAGE_REPO }}
-          ACR_USER: ${{ secrets.AIOPS_ACR_USERNAME }}
-          ACR_PASS: ${{ secrets.AIOPS_ACR_PASSWORD }}
-        run: |
-          set -euo pipefail
-          if [ "$EVENT_NAME" = "workflow_dispatch" ] || [ "$EVENT_NAME" = "workflow_call" ]; then
-            target_tag="$INPUT_TAG"
-          else
-            target_tag="$REF_NAME"
-          fi
-
-          if [ -z "$IMAGE_REPO" ] || [ -z "$ACR_USER" ] || [ -z "$ACR_PASS" ]; then
-            msg="未配置 AIOPS_GATEWAY_IMAGE_REPO / AIOPS_ACR_USERNAME / AIOPS_ACR_PASSWORD，跳过自动推送 OCI 镜像。"
-            echo "$msg"
-            {
-              echo "### 客户机 Gateway OCI 镜像构建"
-              echo "- 状态：未配置阿里云 ACR 发布变量，已跳过推送（不阻塞打标）"
-              echo "- 所需配置：仓库变量 \`AIOPS_GATEWAY_IMAGE_REPO\` 与机密 \`AIOPS_ACR_USERNAME\` / \`AIOPS_ACR_PASSWORD\`"
-            } >> "$GITHUB_STEP_SUMMARY"
-            if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-              echo "::error::$msg" >&2
-              exit 1
-            fi
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          [[ "$target_tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
-            echo "目标标签不是合法 SemVer vX.Y.Z: $target_tag" >&2
-            exit 1
-          }
-
-          git fetch --prune origin main
-          git fetch origin "refs/tags/${target_tag}:refs/tags/${target_tag}"
-          [ "$(git cat-file -t "$target_tag")" = "tag" ] || {
-            echo "标签 $target_tag 不是注释标签（annotated tag），拒绝发布" >&2
-            exit 1
-          }
-          rev=$(git rev-parse --verify "${target_tag}^{commit}")
-          git merge-base --is-ancestor "$rev" origin/main || {
-            echo "标签 $target_tag ($rev) 不是 origin/main 的祖先，拒绝发布" >&2
-            exit 1
-          }
-
-          registry_host="${IMAGE_REPO%%/*}"
-          echo "ready=true" >> "$GITHUB_OUTPUT"
-          echo "tag=$target_tag" >> "$GITHUB_OUTPUT"
-          echo "revision=$rev" >> "$GITHUB_OUTPUT"
-          echo "repo=$IMAGE_REPO" >> "$GITHUB_OUTPUT"
-          echo "registry=$registry_host" >> "$GITHUB_OUTPUT"
-
-      - name: Check out selected tag commit
-        if: steps.meta.outputs.ready == 'true'
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          ref: ${{ steps.meta.outputs.revision }}
-          fetch-depth: 0
-          persist-credentials: false
-
       - name: Install uv
-        if: steps.meta.outputs.ready == 'true'
         uses: astral-sh/setup-uv@bd01e18f51369d5a26f1651c3cb451d3417e3bba # v6.3.1
         with:
           enable-cache: false
           python-version: "3.13"
 
-      - name: Login to ACR registry
-        if: steps.meta.outputs.ready == 'true'
-        env:
-          REGISTRY_HOST: ${{ steps.meta.outputs.registry }}
-          ACR_USER: ${{ secrets.AIOPS_ACR_USERNAME }}
-          ACR_PASS: ${{ secrets.AIOPS_ACR_PASSWORD }}
-        run: |
-          set -euo pipefail
-          printf '%s' "$ACR_PASS" | docker login "$REGISTRY_HOST" --username "$ACR_USER" --password-stdin
-
-      - name: Build, smoke-verify, and push OCI gateway image
-        id: build
-        if: steps.meta.outputs.ready == 'true'
-        env:
-          TARGET_TAG: ${{ steps.meta.outputs.tag }}
-          IMAGE_REPO: ${{ steps.meta.outputs.repo }}
-        run: |
-          set -euo pipefail
-          git fetch --prune origin main
-          git fetch origin "refs/tags/${TARGET_TAG}:refs/tags/${TARGET_TAG}"
-          meta_file="$RUNNER_TEMP/gateway-image.json"
-          bash ops/environments/gateway/build-image.sh \
-            --rev "$TARGET_TAG" \
-            --repo "$IMAGE_REPO" \
-            --tag "$TARGET_TAG" \
-            --push \
-            --output-metadata "$meta_file"
-          python3 - "$meta_file" >> "$GITHUB_OUTPUT" <<'PY'
-          import json, sys
-          data = json.load(open(sys.argv[1], encoding="utf-8"))
-          for k in ("full_version", "image_ref", "image_digest", "ingress_sha256"):
-              print(f"{k}={data.get(k, '')}")
-          PY
-
-      - name: Attach gateway-image.json to GitHub Release
-        if: steps.meta.outputs.ready == 'true'
+      - name: Build, verify, and publish OCI gateway image
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TARGET_TAG: ${{ steps.meta.outputs.tag }}
-          FULL_VERSION: ${{ steps.build.outputs.full_version }}
-        run: |
-          set -euo pipefail
-          meta_file="$RUNNER_TEMP/gateway-image.json"
-          if ! gh release view "$TARGET_TAG" >/dev/null 2>&1; then
-            gh release create "$TARGET_TAG" --verify-tag \
-              --title "AI-Ops $TARGET_TAG" \
-              --notes "客户机 Gateway OCI 容器镜像已构建发布（\`$FULL_VERSION\`）。"
-          fi
-          gh release upload "$TARGET_TAG" "$meta_file" --clobber
-
-      - name: Summarize OCI release
-        if: always() && steps.meta.outputs.ready == 'true'
-        env:
-          JOB_STATUS: ${{ job.status }}
-          TARGET_TAG: ${{ steps.meta.outputs.tag }}
-          FULL_VERSION: ${{ steps.build.outputs.full_version }}
-          IMAGE_REF: ${{ steps.build.outputs.image_ref }}
-          INGRESS_SHA: ${{ steps.build.outputs.ingress_sha256 }}
-        run: |
-          {
-            echo "### 客户机 Gateway OCI 镜像构建与发布"
-            echo "- 结果：$JOB_STATUS"
-            echo "- 官方标签：\`${TARGET_TAG}\`（\`${FULL_VERSION:-未知}\`）"
-            echo "- 不可变镜像摘要：\`${IMAGE_REF:-未生成}\`"
-            echo "- 受控 Nginx 入口模板哈希：\`${INGRESS_SHA:-未生成}\`"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Logout registry
-        if: always() && steps.meta.outputs.ready == 'true'
-        env:
-          REGISTRY_HOST: ${{ steps.meta.outputs.registry }}
-        run: docker logout "$REGISTRY_HOST" >/dev/null 2>&1 || true
+          TARGET_TAG: ${{ inputs.target_tag }}
+          AIOPS_GATEWAY_IMAGE_REPO: ${{ vars.AIOPS_GATEWAY_IMAGE_REPO }}
+          AIOPS_ACR_USERNAME: ${{ secrets.AIOPS_ACR_USERNAME }}
+          AIOPS_ACR_PASSWORD: ${{ secrets.AIOPS_ACR_PASSWORD }}
+        run: bash ops/environments/gateway/publish-release-image.sh --tag "$TARGET_TAG"
