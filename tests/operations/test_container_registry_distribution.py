@@ -263,7 +263,8 @@ def test_host_release_agent_switch_auto_rollback_and_manual_rollback(
     inst = json.loads((opt_root / "installed.json").read_text(encoding="utf-8"))
     assert inst["previous_release"]["image_ref"] == old_ref
 
-    # 2. 健康检查失败时自动回滚回 v1.43.22+aaaaaaaaaaaa
+    # 2. 健康检查失败时自动回滚回 v1.43.22+aaaaaaaaaaaa（保留既有 run-container.sh 不提前误删）
+    (opt_root / "run-container.sh").write_text("#!/bin/sh\n", encoding="utf-8")
     stage_fail = tmp_path / "stage_fail"
     stage_fail.mkdir()
     (stage_fail / f"aiops-access-{env}.service").write_text("[Unit]\nDescription=bad\n", encoding="utf-8")
@@ -293,6 +294,7 @@ def test_host_release_agent_switch_auto_rollback_and_manual_rollback(
             }
         )
     assert new_ref in (opt_root / "container.env").read_text(encoding="utf-8")
+    assert (opt_root / "run-container.sh").is_file()
 
     # 3. 手动 docker -> docker 回滚回 old_ref
     monkeypatch.setattr(agent.pwd, "getpwnam", lambda _u: SimpleNamespace(pw_uid=996, pw_gid=986))

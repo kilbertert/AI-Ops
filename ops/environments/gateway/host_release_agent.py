@@ -342,9 +342,6 @@ def cmd_switch(payload: dict[str, Any]) -> dict[str, Any]:
             _write_atomic(unit_p, new_unit, 0o644)
             subprocess.run(["systemctl", "daemon-reload"], check=True)
 
-        # 清理旧版 run-container.sh 壳脚本（如存在）
-        (root / "run-container.sh").unlink(missing_ok=True)
-
         new_inst = dict(old_inst)
         new_inst.update(
             {
@@ -374,6 +371,8 @@ def cmd_switch(payload: dict[str, Any]) -> dict[str, Any]:
         if nginx_changed:
             subprocess.run([nginx_bin, "-s", "reload"], check=True)
         _verify_hashes(pre_hashes)
+        # 切换与核验全绿后再清理旧版 run-container.sh，确保自动回滚时旧 systemd unit 仍可用
+        (root / "run-container.sh").unlink(missing_ok=True)
         shutil.rmtree(stage, ignore_errors=True)
         return {"ok": True, "untouched_config_verified": True, "health": health}
     except Exception as exc:
