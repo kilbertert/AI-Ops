@@ -50,7 +50,7 @@ DeepSeek首轮超时且无执行证据，明确未验；独立Codex会话9组实
 页面前后路由、草稿、目录和六容器保持；仅计划行增加。云浏览器余额不足未启动，复用既有本机管理验收通道；
 没有新增线上业务隧道，浏览器和临时管理连接已关闭。
 
-操作见[中央预检任务](../agents/environment-registry.md#中央现场预检任务)、[ADR0282](../adr/0282-managed-preflight-task-worker.md)。
+操作见[中央预检任务](../agents/environment-registry.md#中央现场预检任务)、[ADR0282](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0282-managed-preflight-task-worker.md)。
 原日志、截图、主机快照、制品摘要、失败与恢复材料和不可变部署账本全部私有；本事件仅本回执。
 未验生产正向任务配置与后台自动领取、资源准备/实际对账、候选业务验证及激活、真实两环境三功能和长期容量。
 下一步先接生产受控任务引用及后台只读执行端，再串资源准备/验证/激活；P4/P5保持open。

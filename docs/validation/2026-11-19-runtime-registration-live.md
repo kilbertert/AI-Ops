@@ -1,7 +1,7 @@
 # 停用目标运行资源登记与节点能力回执
 
 接续[运行安装](2026-11-19-runtime-install-live.md)；判据为[Feature](../acceptance/environment-directory.feature)、
-[QA D32](../acceptance/environment-directory-qa-plan.md)、[ADR0290](../adr/0290-inactive-runtime-registration.md)。
+[QA D32](../acceptance/environment-directory-qa-plan.md)、[ADR0290](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0290-inactive-runtime-registration.md)。
 本片只登记资源和验证节点能力，不表示正常身份、模型业务或完整开通已验收。
 
 ## 实现与验证

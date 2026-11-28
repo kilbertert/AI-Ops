@@ -5,7 +5,7 @@
 ## 决定
 
 文档维护流程以[文档导航](../README.md#变更前与交付时)为唯一正文，AGENTS只保留触发入口。
-替代[ADR-0097](0097-milestone-records-are-one-file-each.md)的强制双记录和按文件名选最新做法；
+替代[ADR-0097](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0097-milestone-records-are-one-file-each.md)的强制双记录和按文件名选最新做法；
 保留独立验收事件一文件、旧日志冻结及失败证据。每个Issue承载自己的进度，必要回执不再另抄摘要。
 补充：仅为链接回执而建立进度文件仍属重复。新文件须有不同的读者、用途或生命周期，
 在原任务说明区别；不同验收事件保留各自范围，历史重复导航标明时点后不继续维护。

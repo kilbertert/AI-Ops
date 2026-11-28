@@ -8,7 +8,7 @@
 2026-10-30 的产品反馈：「内容不是技术解释，是下结论，然后给通俗易懂注释，最起码商务
 能看得懂」。
 
-上一片（[ADR-0180](0180-answers-are-plain-text-laid-out.md)）只解决了**排版**：分节、
+上一片（[ADR-0180](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0180-answers-are-plain-text-laid-out.md)）只解决了**排版**：分节、
 逐行、去掉微秒。落到 C 端的实际输出是这样的：
 
 ```

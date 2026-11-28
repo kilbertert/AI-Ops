@@ -2,7 +2,7 @@
 
 版本：1.39.0；最终代码`bae0aa88`，基线`f4d4c767`。日期：2026-11-22。
 范围：开发主机临时数据根；对应[Feature](../acceptance/environment-directory.feature)正式开通规则、
-[QA D43](../acceptance/environment-directory-qa-plan.md#d43正式发布最后准入与恢复整链)及[ADR0305](../adr/0305-environment-publication-transaction.md)。
+[QA D43](../acceptance/environment-directory-qa-plan.md#d43正式发布最后准入与恢复整链)及[ADR0305](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0305-environment-publication-transaction.md)。
 本事件验证代码与合成整链，未部署或启用生产环境。
 
 ## 已证明的行为

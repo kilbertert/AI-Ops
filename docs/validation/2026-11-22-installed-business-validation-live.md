@@ -1,7 +1,7 @@
 # 已登记租户三业务验证：实现交付与缺项现场验收
 
 本事件对应P4 [D40](../acceptance/environment-directory-qa-plan.md)和
-[ADR0301](../adr/0301-installed-business-validation.md)。验证任务消费实际模型/工具的对象证据；
+[ADR0301](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0301-installed-business-validation.md)。验证任务消费实际模型/工具的对象证据；
 技术验证与业务准确性确认、正式激活分开。现场仅获准空案例拒绝验收，不运行模型。
 
 ## 实现与独立反例

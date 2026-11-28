@@ -69,6 +69,7 @@ Nginx 边缘片段（`dify-console-publish.conf` 与 `dify-login-proxy.conf`）�
 
 ## 6. 按需深挖的子文档
 
+- 现行生效架构决策总表：[现行 ADR 索引（含 Dify 生效决策对照）](../../docs/adr-index.md)
 - Dify 实例与上游容器基准：[deploy/dify-36/README.md](README.md)
 - 前端源码补丁与 Web ACR 流水线：[deploy/dify-36/web-patches/README.md](web-patches/README.md)
 - 发布桥路由合同与 Nginx 配置：[ops/dify-console-bridge/README.md](../../ops/dify-console-bridge/README.md)

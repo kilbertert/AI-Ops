@@ -26,7 +26,7 @@
 
 最多32条连接独立搬运，超出额度的新连接立即关闭，正常结束及异常都释放额度。
 流式回答连接保持时，工具回调仍能经同一入口读取Console；串行搬运会让两者互相等待。
-这不改变Dify的应用/管理鉴权，也不把一次可达当作业务验收。决定见[ADR0294](../../docs/adr/0294-inactive-consumer-trial.md)。
+这不改变Dify的应用/管理鉴权，也不把一次可达当作业务验收。决定见[ADR0294](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0294-inactive-consumer-trial.md)。
 
 ## 部署（36）
 

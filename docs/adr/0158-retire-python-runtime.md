@@ -3,7 +3,7 @@
 Status: Accepted
 
 2026-10-29。本轮用户明确：旧执行器可以整体退役，C端检测和管家/Dify 试用应走各自业务路线；
-诊断/设备 CLI 无业务用途。用户另行确认保留独立运维入口。此决定替代 [0157](0157-remove-unused-diagnostic-config-aliases.md)。
+诊断/设备 CLI 无业务用途。用户另行确认保留独立运维入口。此决定替代 [0157](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0157-remove-unused-diagnostic-config-aliases.md)。
 
 ## 决定
 

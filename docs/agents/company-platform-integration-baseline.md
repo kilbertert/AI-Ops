@@ -72,7 +72,7 @@ location ~* ^/(erp|qm|das|dis|...|upms|mall|mallapi|...)  {  # ← 公司服务�
 > **本节下面两段保留原文以存证，但阅读时按上面这段收窄。**
 > 对 D 批的影响：收益是「来源密钥的注入主体从我们自己的 nginx 换成网关」（A2 消掉），
 > **不是**「身份由公司校验」。D 的验收因此不得断言后者 —— 历史施工判据与顺序已归档至
-> `AI-Ops-history-archive:docs/agents/operator-repair-blueprint.md` §2（见 [ADR-0346](../adr/0346-retire-legacy-i18n-briefs-and-name-amount-parsers.md)）。
+> `AI-Ops-history-archive:docs/agents/operator-repair-blueprint.md` §2（见 [ADR-0346](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0346-retire-legacy-i18n-briefs-and-name-amount-parsers.md)）。
 
 `cloud-gateway` 的两个 `AbstractGatewayFilterFactory` **在源码里**是设计好的两条注入路径：
 
@@ -360,7 +360,7 @@ return point.proceed();
 
 ## 5. 这条根基对既有文档的效力
 
-- `docs/adr/0003-bff-delegated-user-identity.md`（委托句柄）与
+- [ADR-0003（归档）](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0003-bff-delegated-user-identity.md)（委托句柄）与
   `docs/adr/0008-adr-0003-deviation-session-direct-read.md`（直读偏离）**仍然有效**，
   且现在有了更完整的「为什么」：偏离的实质是**站点位置**（不在网关之后），
   不只是「读了哪个存储」。

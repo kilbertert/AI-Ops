@@ -6,7 +6,7 @@ Status: Accepted（用户2026-11-22明确批准；只更新用途与记录，不
 
 第二环境原共享Dify HTTPS仍间歇握手重置；既有受限备用入口有认证与流式证据。
 将该同域名、已分配端口的入口登记为该环境正式服务API入口，替代
-[ADR0266](0266-temporary-shared-dify-https.md)对它的48小时临时生命周期；原传输与授权边界不变。
+[ADR0266](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0266-temporary-shared-dify-https.md)对它的48小时临时生命周期；原传输与授权边界不变。
 不新增端口、域名、隧道、代理进程或公司改码，不改变已登记精确来源、固定API路径、
 主机名/证书验证及应用Bearer鉴权，不开放控制台/内部管理。
 

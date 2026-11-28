@@ -6,7 +6,7 @@
 
 ## 判据与实现
 
-按 [ADR-0255](../adr/0255-consumer-publication-selection-recovery.md)、
+按 [ADR-0255](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0255-consumer-publication-selection-recovery.md)、
 [QA 计划](../agents/consumer-wf01/publication-selection-qa.md)实现：应用选库与租户授权
 分别显示；原生草稿保存携带提示词与选库，失败不假报已发布；状态读取当前草稿与正式应用。
 首次校验早于创建Agent，系统原始半成品可按受管应用身份恢复，不按提示词相等判断归属。

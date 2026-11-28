@@ -94,7 +94,7 @@ charging-gun_property 有3269行完整曲线。验收门只认监测表样本、
 部分发布被 ENVIRONMENT_PUBLICATION_VALIDATION_REQUIRED 拒绝。
 上述是修复前失败。后继核对SOP确认：监测表并非所有启动类型的过程数据源，
 阻塞来自统计工具和验收门仅消费监测样本，不能归结为公司必须补写业务表。
-#1684 `869253ce`（[ADR0322](../adr/0322-process-stats-consumes-authorized-timeline.md)）
+#1684 `869253ce`（[ADR0322](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0322-process-stats-consumes-authorized-timeline.md)）
 使统计与验收沿既有SOP消费同授权订单时序；保持三业务全集、设备/窗口绑定、
 有效期与缺证拒绝，不修改公司监测管道。
 
@@ -116,7 +116,7 @@ charging-gun_property 有3269行完整曲线。验收门只认监测表样本、
 ### 容量错位已修，平高发布与恢复通过
 
 06:36 UTC容量首轮三业务均完成，但实际运行窗口错开，不能记并发通过。
-#1687 `3276303a`（[ADR0325](../adr/0325-capacity-launch-follows-window-start.md)）
+#1687 `3276303a`（[ADR0325](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0325-capacity-launch-follows-window-start.md)）
 改为先启动客服，等被测run实际创建后再放行短腿，不用排队响应替代执行时间。
 标准CD [45348867834](https://github.com/kilbertert/AI-Ops/actions/runs/45348867834)成功，
 41现场health为`1.40.2+3276303a6923`；95仍为`1.40.2+9d8e64fd08e5`。
@@ -195,13 +195,13 @@ Devin 复审指出初版放行信号取自 `consumer-start` 返回仍早于窗�
 
 ### 登记队列与取消出口已经修复
 
-#1689 `c28b2dd2`（[ADR0326](../adr/0326-checking-registration-yields-slot.md)）
+#1689 `c28b2dd2`（[ADR0326](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0326-checking-registration-yields-slot.md)）
 在中央持久化两条认领面的轮转，保证安装/预检任一侧长期待核也不会饿死另一侧。
 checking及冲突保护保留，不按时间伪造已恢复；部署后排队预检已实际推进。
 
-#1691 `93e4de4c`（[ADR0327](../adr/0327-route-conflict-ignores-own-lineage-publish-rows.md)）
+#1691 `93e4de4c`（[ADR0327](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0327-route-conflict-ignores-own-lineage-publish-rows.md)）
 修正登记把撤回墓碑/本血统发布留行误当活跃占用的问题；真实活跃/异租户冲突仍拒绝。
-#1692 `0dab882f`（[ADR0328](../adr/0328-cancelled-registration-exits-on-asset-evidence.md)）
+#1692 `0dab882f`（[ADR0328](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0328-cancelled-registration-exits-on-asset-evidence.md)）
 为已取消登记增加锁内只读资产证据：事实可读且本轮已取消时收敛，不用超时推测副作用。
 原阻塞登记已于14:42 UTC落cancelled，安装面开放任务为0。
 这证明队列与取消出口已恢复；目标后继已安装含#1691的制品并重新登记，见下一节。

@@ -39,7 +39,7 @@ health `1.19.0+3fdf6373205e`，注释tag `v1.19.0` 指向合并修订。
 只读观察到restart计数很高、退出码1、OOMKilled=false。未操作该容器，不将变化直接归因于本次安装，
 也不宣称所有公司服务均未重启。原失败和后续分类保留；短时换页为0及空闲资源样本不代表长期业务容量。
 
-操作复用[成套安装手册](../../ops/environments/gateway/install.md#停用候选的成套配置)和[ADR0280](../adr/0280-paired-installation-configuration-recovery.md)。
+操作复用[成套安装手册](../../ops/environments/gateway/install.md#停用候选的成套配置)和[ADR0280](https://github.com/kilbertert/AI-Ops-history-archive/blob/4bed22cbabbcbe80f242c83275a46d3f550f996d/docs/adr/0280-paired-installation-configuration-recovery.md)。
 制品、恢复路径、凭据、主机快照和原日志保持私有，部署/中断/恢复记录绑定实际源修订与摘要；本事件仅留本回执。
 未修改公司代码、服务或业务行，不新增公网入口，不恢复业务SSH隧道或时序直连账户。
 

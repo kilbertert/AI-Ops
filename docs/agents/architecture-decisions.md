@@ -67,6 +67,9 @@ Records live at `docs/adr/NNNN-slug.md`, numbered in order. Take the next free
 number — do not reuse one, and do not renumber. Write it in the **same change**
 as the code it describes, so the two cannot drift.
 
+> **现行索引与编号水位线（ADR-0370）**：阅读现行有效决策优先查阅 [`docs/adr-index.md`](../adr-index.md)。
+> 231 份已被取代或一次性的局部 ADR 已归档至 `kilbertert/AI-Ops-history-archive@4bed22cb`，其历史编号**永久保留、严禁复用**；后续新增 ADR 编号从 **`0371`** 起顺延递增。
+
 A record still being written starts with `Draft` or `提案` in its title. Drafts
 are exempt from the structure check, which is what lets a proposal be committed
 before its alternatives are settled.
