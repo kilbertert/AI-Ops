@@ -145,12 +145,37 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
                 status.HTTP_404_NOT_FOUND, "KNOWLEDGE_SYNC_DISABLED", "knowledge sync is not available"
             )
 
+        target_env = settings.environment
         try:
             tenant_id = workspaces.tenant_for_workspace(workspace.strip(), settings.environment)
         except DifyWorkspaceError as exc:
-            raise StandardAPIError(exc.http_status, exc.code, exc.message) from exc
+            if exc.code == "DIFY_WORKSPACE_UNRESOLVED" and getattr(
+                settings, "environment_management_registry_file", ""
+            ):
+                try:
+                    entry = workspaces.entry_for_workspace(workspace.strip())
+                except DifyWorkspaceError as inner_exc:
+                    raise StandardAPIError(
+                        inner_exc.http_status, inner_exc.code, inner_exc.message
+                    ) from inner_exc
+                tenant_id = entry["tenant_id"]
+                target_env = entry["environment"]
+            else:
+                raise StandardAPIError(exc.http_status, exc.code, exc.message) from exc
         try:
-            owned = client.for_tenant(tenant_id).list_knowledge_bases()
+            if target_env != settings.environment and hasattr(client, "base_url"):
+                from aiops_diagnostics.knowledge.knowledge_retrieval import KbServiceClient
+
+                kb_client = KbServiceClient(
+                    client.base_url,
+                    tenant_id=tenant_id,
+                    environment=target_env,
+                    service_token=getattr(client, "service_token", ""),
+                    timeout=getattr(client, "timeout", 15.0),
+                )
+            else:
+                kb_client = client.for_tenant(tenant_id)
+            owned = kb_client.list_knowledge_bases()
         except Exception:  # noqa: BLE001 - upstream unavailable degrades cleanly
             return {"created": 0, "tenant_id": tenant_id, "unavailable": True}
 
@@ -319,11 +344,20 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
                 "this link has expired; go back to Dify and click the button again",
             )
         tenant_id = consumed["tenant_id"]
+        target_env = settings.environment
+        hop_ws = str(consumed.get("workspace_id") or "").strip()
+        if hop_ws and getattr(settings, "environment_management_registry_file", ""):
+            try:
+                entry = context.dify_workspaces.entry_for_workspace(hop_ws)
+                if entry.get("tenant_id") == tenant_id and entry.get("environment"):
+                    target_env = entry["environment"]
+            except DifyWorkspaceError:
+                pass
         client = ragflow_console.RAGFlowLoginClient(settings.ragflow_console_base_url)
         try:
             target, session = ragflow_console.open_console(
                 store=context.store,
-                environment=settings.environment,
+                environment=target_env,
                 caller=ragflow_console.DeclaredTenant(effective_tenant_id=tenant_id),
                 credential_key=settings.ragflow_credential_key,
                 client=client,
@@ -334,7 +368,7 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
             ragflow_console.record(
                 context.store,
                 tenant_id=tenant_id,
-                environment=settings.environment,
+                environment=target_env,
                 outcome="refused",
                 reason_code=exc.code,
             )
@@ -342,7 +376,7 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
         ragflow_console.record(
             context.store,
             tenant_id=tenant_id,
-            environment=settings.environment,
+            environment=target_env,
             outcome="granted",
             ragflow_email=session.ragflow_email,
         )

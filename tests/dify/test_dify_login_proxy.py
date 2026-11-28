@@ -1986,3 +1986,401 @@ def test_directory_manager_survives_disabled_env_without_business_access(environ
     s["rows"][0]["company_gateway_url"] = "https://drifted.example.test"
     apply(s["registry"], s["rows"], expected_revision=4, actor="fixture", managers=managers)
     assert _call(s["bridge_url"], "/__aiops/manage", {"action": "environments"}, headers=headers)[0] == 401
+
+
+def test_auto_registry_sync_customer_env_login_and_bridge_isolation(tmp_path, monkeypatch):
+    """ADR-0373：控制面自动同步目录 -> 客户环境动态上线、system/租户准入隔离、工作区切换与过渡清理。"""
+    import ssl
+    import subprocess
+    from dataclasses import replace
+
+    from dify_console_bridge import bridge
+
+    from aiops_diagnostics.common.private_files import write_private_text
+    from aiops_diagnostics.onboarding.registry import apply
+
+    cert, key = tmp_path / "cert.pem", tmp_path / "key.pem"
+    subprocess.run(
+        [
+            "openssl",
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-keyout",
+            str(key),
+            "-out",
+            str(cert),
+            "-days",
+            "1",
+            "-nodes",
+            "-subj",
+            "/CN=127.0.0.1",
+            "-addext",
+            "subjectAltName=IP:127.0.0.1",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    monkeypatch.setenv("SSL_CERT_FILE", str(cert))
+    monkeypatch.setattr(urllib.request, "_opener", None)
+    tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    tls.load_cert_chain(cert, key)
+
+    servers = []
+
+    def start(handler=None, *, secure=False, server=None):
+        server = server or ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        if secure:
+            server.socket = tls.wrap_socket(server.socket, server_side=True)
+        servers.append(server)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        return f"{'https' if secure else 'http'}://127.0.0.1:{server.server_port}"
+
+    dify_events = {"joined": [], "switched": [], "deleted": []}
+
+    class Dify(_FakeDify):
+        accounts = {}
+
+        def do_POST(self):  # noqa: N802
+            body = self._read()
+            if self.path.endswith("/members/invite-email"):
+                email = body["emails"][0]
+                uid = email.split("@")[0].replace("-", "")
+                self.accounts[email] = f"acct-{uid}"
+                self._reply(
+                    {
+                        "result": "success",
+                        "tenant_id": "nursery-ws-0000",
+                        "invitation_results": [
+                            {
+                                "status": "success",
+                                "email": email,
+                                "url": f"https://dify.test/activate?email={email}&token=tok-{uid}",
+                            }
+                        ],
+                    }
+                )
+            elif self.path.endswith("/activate"):
+                self._reply({"result": "success"})
+            elif self.path.endswith("/enterprise/workspace/member"):
+                dify_events["joined"].append((body["workspace_id"], body["account_id"], body["email"]))
+                self._reply({"result": "success"})
+            elif self.path.endswith("/workspaces/switch"):
+                dify_events["switched"].append(body["tenant_id"])
+                self._reply({"result": "success"})
+            else:
+                self._reply({"result": "success"})
+
+        def do_DELETE(self):  # noqa: N802
+            dify_events["deleted"].append(self.path)
+            self._reply({"result": "success"})
+
+        def do_GET(self):  # noqa: N802
+            if self.path.endswith("/members"):
+                self._reply(
+                    {
+                        "accounts": [
+                            {"id": account, "email": email, "role": "editor"}
+                            for email, account in self.accounts.items()
+                        ]
+                    }
+                )
+            else:
+                self._reply({"id": "ws-jiejia-1", "role": "editor"})
+
+    class CustomerCompany(_FakeCompany):
+        calls = []
+        permissions = []  # 客户 UPMS 无任何 aiops:* 菜单行
+        tenant_id = "-1"
+        user_type = "-1"
+        fail_login = ""
+        captcha_fail = ""
+        gateway_reject = ""
+        active_user = ("1454348737375174658", "system", "-1", "-1")
+
+        def do_POST(self):  # noqa: N802
+            type(self).calls.append("POST " + self.path.split("?")[0])
+            length = int(self.headers.get("Content-Length") or 0)
+            if length:
+                self.rfile.read(length)
+            uid, uname, tid, _utype = type(self).active_user
+            if self.path.startswith("/upms/token/login"):
+                token = sign_console_jwt({"id": uid, "username": uname, "tenant_id": tid}, "company-key")
+                body = json.dumps(
+                    {"access_token": token, "id": uid, "username": uname, "tenant_id": tid}
+                ).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            self.send_response(404)
+            self.end_headers()
+
+        def do_GET(self):  # noqa: N802
+            if self.path.startswith("/code"):
+                super().do_GET()
+                return
+            type(self).calls.append("GET " + self.path.split("?")[0])
+            uid, uname, tid, utype = type(self).active_user
+            if self.path.startswith("/upms/user/info"):
+                body = json.dumps(
+                    {
+                        "code": 0,
+                        "msg": "ok",
+                        "data": {
+                            "sysUser": {"id": uid, "username": uname, "tenantId": tid, "type": utype},
+                            "permissions": list(type(self).permissions),
+                        },
+                    }
+                ).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            self.send_response(404)
+            self.end_headers()
+
+    dify_url = start(Dify)
+    ctrl_company_url = start(
+        type(
+            "CtrlCompany",
+            (_FakeCompany,),
+            {
+                "calls": [],
+                "permissions": [EDIT_PERMISSION, PUBLISH_PERMISSION],
+                "fail_login": "",
+                "captcha_fail": "",
+                "gateway_reject": "",
+            },
+        ),
+        secure=True,
+    )
+    cust_company_url = start(CustomerCompany, secure=True)
+
+    # 先建控制面 registry（含 41 与 jiejia），而本地 36 种子 registry 仅含 41（模拟旧手工投影缺 jiejia）
+    seed_registry = tmp_path / "seed" / "registry.json"
+    ctrl_registry = tmp_path / "ctrl" / "registry.json"
+    ctrl_gw_holder = {"url": ""}
+
+    class ControlGateway(_FakeDify):
+        calls = []
+
+        def do_GET(self):  # noqa: N802
+            type(self).calls.append((self.path, dict(self.headers)))
+            if self.path.endswith("/management/environments"):
+                self._reply({"ok": True, "session_environment": "jiejia"})
+                return
+            env_hdr = self.headers.get("X-AIOps-Workspace-Environment", "")
+            if env_hdr == "*" and "tenant_id=__catalogue__" in self.path:
+                doc = json.loads(ctrl_registry.read_text(encoding="utf-8"))
+                self._reply({"registry": doc})
+                return
+            if env_hdr == "jiejia" and "tenant_id=platform" in self.path:
+                self._reply(
+                    {
+                        "workspace_id": "ws-jiejia-1",
+                        "workspace_ids": ["ws-jiejia-1", "ws-jiejia-2"],
+                        "environment": "jiejia",
+                    }
+                )
+                return
+            if env_hdr == "jiejia" and "tenant_id=1990990768688599040" in self.path:
+                self._reply(
+                    {
+                        "workspace_id": "ws-jiejia-1",
+                        "workspace_ids": ["ws-jiejia-1"],
+                        "environment": "jiejia",
+                    }
+                )
+                return
+            self._reply({"workspace_id": "ws-41", "workspace_ids": ["ws-41"], "environment": "41"})
+
+        def do_POST(self):  # noqa: N802
+            type(self).calls.append((self.path, dict(self.headers)))
+            self._read()
+            self._reply({"ok": True, "session_environment": "jiejia"})
+
+    ctrl_gw_url = start(ControlGateway)
+    ctrl_gw_holder["url"] = ctrl_gw_url
+
+    row_41 = {
+        "id": "41",
+        "name": "41生产环境",
+        "enabled": True,
+        "gateway_url": ctrl_gw_url,
+        "cpms_base_url": ctrl_company_url + "/charging-pile",
+        "company_gateway_url": ctrl_company_url,
+        "config_ref": str(tmp_path / "41.env"),
+        "tenants": [{"id": "T-1", "name": "Ulink", "enabled": True}],
+    }
+    row_jiejia = {
+        "id": "jiejia",
+        "name": "捷佳四轮国内充电",
+        "enabled": True,
+        "gateway_url": "https://api.juxichongdian.cn",
+        "cpms_base_url": cust_company_url + "/charging-pile",
+        "company_gateway_url": cust_company_url,
+        "config_ref": str(tmp_path / "jiejia.env"),
+        "tenants": [{"id": "1990990768688599040", "name": "捷佳", "enabled": True}],
+    }
+    apply(seed_registry, [row_41], expected_revision=0, actor="seed", managers=[])
+    apply(ctrl_registry, [row_41, row_jiejia], expected_revision=0, actor="ctrl", managers=[])
+
+    login_file = tmp_path / "login-creds.json"
+    bridge_file = tmp_path / "bridge-creds.json"
+    write_private_text(
+        login_file,
+        json.dumps(
+            {
+                "schema": "aiops-console-environments/1",
+                "credentials": [
+                    {
+                        "id": "41",
+                        "encode_key": AES_KEY,
+                        "basic_auth": "",
+                        "client_type": "admin",
+                        "info_client_type": "",
+                        "gateway_internal_token": "41" * 16,
+                        "operator_trial_key": "k" * 36,
+                    }
+                ],
+            }
+        ),
+    )
+    write_private_text(
+        bridge_file,
+        json.dumps(
+            {
+                "schema": "aiops-console-environments/1",
+                "credentials": [
+                    {
+                        "id": "41",
+                        "publish_key": "p" * 36,
+                        "trial_key": "t" * 36,
+                        "gateway_internal_token": "41" * 16,
+                    }
+                ],
+            }
+        ),
+    )
+
+    login_server = make_server(
+        LoginProxySettings(
+            listen_host="127.0.0.1",
+            listen_port=0,
+            public_origin="https://console.example",
+            data_dir=str(tmp_path / "data"),
+            company=CompanyAuthSettings(base_url=ctrl_company_url, encode_key=AES_KEY),
+            dify=DifyConsoleSettings(base_url=dify_url, secret_key=SECRET_KEY, environment="41"),
+            owner_user_id=OWNER_ACCOUNT_ID,
+            edit_permission=EDIT_PERMISSION,
+            publish_permission=PUBLISH_PERMISSION,
+            gateway_url=ctrl_gw_url,
+            gateway_internal_token="41" * 16,
+            inner_api_base_url=dify_url,
+            inner_api_key="i" * 32,
+            environment_registry_file=str(seed_registry),
+            environment_credentials_file=str(login_file),
+            auto_registry_environments=True,
+            backoff_threshold=50,
+        )
+    )
+    login_url = start(server=login_server)
+    bridge_server = bridge.make_server(
+        bridge.BridgeSettings(
+            listen_host="127.0.0.1",
+            listen_port=0,
+            dify_base_url=dify_url,
+            gateway_base_url=ctrl_gw_url,
+            publish_key="unused",
+            console_origin="https://console.example",
+            workspace_id="ws-41",
+            login_proxy_url=login_url,
+            environment_credentials_file=str(bridge_file),
+            control_plane_managed_envs=True,
+        )
+    )
+    bridge_url = start(server=bridge_server)
+
+    try:
+        # 1. 自动同步后 /__aiops/login/environments 同时返回 41 与 jiejia
+        cat = json.loads(get(login_url, "/__aiops/login/environments")[1])
+        assert cat == {
+            "environments": [
+                {"id": "41", "name": "41生产环境"},
+                {"id": "jiejia", "name": "捷佳四轮国内充电"},
+            ],
+            "selection_required": True,
+        }
+
+        # 2. jiejia 非 system 的 type=-1 平台账号无权限码时必须拒绝（403）
+        CustomerCompany.active_user = ("999001", "supply", "-1", "-1")
+        assert get(login_url, "/__aiops/login/captcha?randomStr=nsys01&environment=jiejia")[0] == 200
+        assert _login(login_url, username="supply", environment="jiejia", randomStr="nsys01")[0] == 403
+
+        # 3. jiejia system 超管免写客户 UPMS 菜单行正常登录，加入本环境全部工作区、切换并清理过渡工作区
+        CustomerCompany.active_user = ("1454348737375174658", "system", "-1", "-1")
+        assert get(login_url, "/__aiops/login/captcha?randomStr=jsys01&environment=jiejia")[0] == 200
+        st, body, hdrs = _login(login_url, username="system", environment="jiejia", randomStr="jsys01")
+        assert st == 200, body
+        cookies = SimpleCookie(hdrs["set-cookie-all"])
+        sys_token = cookies["__Host-access_token"].value
+        assert [w for w, _, _ in dify_events["joined"]] == ["ws-jiejia-1", "ws-jiejia-2"]
+        assert dify_events["switched"] == ["ws-jiejia-1"]
+        assert any(p.endswith("/members/acct-jiejia1454348737375174658") for p in dify_events["deleted"])
+
+        verdict = _call(login_url, PUBLISH_CHECK_ROUTE, {"session": sys_token})[1]
+        assert verdict["allowed"] is True
+        assert verdict["environment"] == "jiejia"
+        assert verdict["gateway_url"] == ctrl_gw_url
+
+        ex_st, ex_body, _ = _call(
+            login_url,
+            "/__aiops/internal/operator-token",
+            {"session": sys_token},
+            headers={"Authorization": "Bearer " + "k" * 36},
+        )
+        assert ex_st == 200 and ex_body["environment"] == "jiejia"
+
+        # 4. jiejia 独立租户账号正常登录并仅加入本租户工作区
+        dify_events["joined"].clear()
+        CustomerCompany.active_user = ("1990990769149558786", "jiejia", "1990990768688599040", "1")
+        assert get(login_url, "/__aiops/login/captcha?randomStr=jten01&environment=jiejia")[0] == 200
+        st2, body2, _ = _login(login_url, username="jiejia", environment="jiejia", randomStr="jten01")
+        assert st2 == 200, body2
+        assert [w for w, _, _ in dify_events["joined"]] == ["ws-jiejia-1"]
+
+        # 5. 同源桥在 control_plane_managed_envs=True 下将 jiejia 会话路由至控制面，并拒绝非匹配控制面地址
+        sys_headers = {
+            "Cookie": "; ".join(f"{k}={v.value}" for k, v in cookies.items()),
+            "X-CSRF-Token": cookies["__Host-csrf_token"].value,
+            "Origin": "https://console.example",
+            "Referer": "https://console.example/aiops/environments",
+        }
+        ControlGateway.calls.clear()
+        m_st, m_body, _ = _call(
+            bridge_url, "/__aiops/manage", {"action": "environments"}, headers=sys_headers
+        )
+        assert m_st == 200 and m_body["ok"] is True
+        assert len(ControlGateway.calls) == 1
+
+        # 安全防线：若桥配置的 gateway_base_url 与会话返回 gateway_url 不同，绝不复用控制面密钥（403）
+        handler_cls = bridge_server.RequestHandlerClass
+        orig_settings = handler_cls.settings
+        handler_cls.settings = replace(orig_settings, gateway_base_url="https://other-control.example")
+        try:
+            refused_st, _, _ = _call(
+                bridge_url, "/__aiops/manage", {"action": "environments"}, headers=sys_headers
+            )
+            assert refused_st == 403
+        finally:
+            handler_cls.settings = orig_settings
+    finally:
+        for server in reversed(servers):
+            server.shutdown()
+            server.server_close()

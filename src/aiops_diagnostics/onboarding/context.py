@@ -18,7 +18,11 @@ def _path(context):
 
 
 def _identity(context, caller):
-    return (context.settings.environment, caller.tenant_id, caller.user_id)
+    return (
+        getattr(caller, "environment", "") or context.settings.environment,
+        caller.tenant_id,
+        caller.user_id,
+    )
 
 
 def knowledge_binding(settings, *, target_only=False):

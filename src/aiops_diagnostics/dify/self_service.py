@@ -132,31 +132,40 @@ class SelfService:
             "targets_json": json.dumps(targets, ensure_ascii=False, sort_keys=True),
         }
 
+    def _caller_matches_row_env(self, caller, row: dict) -> bool:
+        caller_env = str(getattr(caller, "environment", "") or self.settings.environment)
+        if not self.is_remote_app(row):
+            return caller_env == str(self.settings.environment)
+        return caller_env == str(row.get("environment") or "").strip()
+
     def authorize_app(self, caller, app_id: str):
         row = self.managed(app_id)
         if row is None:
             raise auth.SetupRefused("SETUP_APP_NOT_MANAGED")
-        if self.is_remote_app(row):
-            auth.require_environment_manager(self.context, caller, row["environment"])
-            return row
+        if not self._caller_matches_row_env(caller, row):
+            raise auth.SetupRefused("SETUP_ENVIRONMENT_MISMATCH")
         if row["tenant_id"] != caller.tenant_id:
             auth.require_target(self.context, caller, row["tenant_id"])
         return row
 
     def workspace_scope(self, caller, workspace_id: str) -> tuple[str, str]:
-        """校验发起人是否有权进入指定 Dify 工作区，返回 `(tenant_id, environment)`。"""
+        """校验发起人是否有权进入当前登录环境下的指定 Dify 工作区，返回 `(tenant_id, environment)`。"""
+        caller_env = str(getattr(caller, "environment", "") or self.settings.environment)
         spaces = DifyWorkspaces(self.settings.database_file)
         try:
-            tenant = spaces.tenant_for_workspace(workspace_id, self.settings.environment)
+            tenant = spaces.tenant_for_workspace(workspace_id, caller_env)
         except DifyWorkspaceError as exc:
-            if exc.code == DIFY_WORKSPACE_UNRESOLVED and auth.management_registry_path(self.context):
-                entry = spaces.entry_for_workspace(workspace_id)
-                auth.require_environment_manager(self.context, caller, entry["environment"])
-                return entry["tenant_id"], entry["environment"]
+            if exc.code == DIFY_WORKSPACE_UNRESOLVED:
+                try:
+                    other = spaces.entry_for_workspace(workspace_id)
+                except DifyWorkspaceError:
+                    other = None
+                if other is not None and other["environment"] != caller_env:
+                    raise auth.SetupRefused("SETUP_ENVIRONMENT_MISMATCH") from exc
             raise
         if tenant != caller.tenant_id:
             auth.require_target(self.context, caller, tenant)
-        return tenant, self.settings.environment
+        return tenant, caller_env
 
     def workspace(self, caller, workspace_id: str) -> str:
         """兼容入口：返回工作区所属租户编号。"""

@@ -434,22 +434,99 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
         tenant_id: str,
         _: None = Depends(deps.dify_workspace_credential),  # noqa: B008
     ) -> dict[str, Any]:
-        """按本机部署环境与租户反查已登记的 Dify workspace id（只查不建）。"""
+        """按受控部署/目录环境与租户反查已登记的 Dify workspace id（只查不建）。"""
         if "environment" in request.query_params:
             raise StandardAPIError(
                 status.HTTP_400_BAD_REQUEST,
                 "DIFY_WORKSPACE_ENVIRONMENT_NOT_ACCEPTED",
                 "environment comes from this deployment's identity, not from the request",
             )
+        header_env = (request.headers.get("X-AIOps-Workspace-Environment") or "").strip()
+        reg_path = self_service_identity.management_registry_path(context)
+        if header_env == "*" and tenant_id == "__catalogue__":
+            if not reg_path:
+                raise StandardAPIError(
+                    status.HTTP_404_NOT_FOUND,
+                    "ENVIRONMENT_REGISTRY_UNAVAILABLE",
+                    "environment registry is not configured",
+                )
+            from aiops_diagnostics.onboarding import registry as env_registry
+
+            try:
+                doc = env_registry.load(reg_path)
+            except env_registry.RegistryError as exc:
+                raise StandardAPIError(
+                    status.HTTP_404_NOT_FOUND, "ENVIRONMENT_REGISTRY_UNAVAILABLE", str(exc)
+                ) from exc
+            return {"registry": doc}
+
+        target_env = header_env or context.settings.environment
+        if target_env != context.settings.environment:
+            from aiops_diagnostics.gateway.deployment_environment import canonical_environment
+            from aiops_diagnostics.onboarding import registry as env_registry
+
+            try:
+                target_env = canonical_environment(target_env)
+                if not reg_path:
+                    raise env_registry.RegistryError("ENVIRONMENT_NOT_REGISTERED")
+                env_registry.EnvironmentRegistry(reg_path, target_env).entry()
+            except (ValueError, env_registry.RegistryError) as exc:
+                raise StandardAPIError(
+                    status.HTTP_404_NOT_FOUND,
+                    "DIFY_WORKSPACE_UNRESOLVED",
+                    f"环境 {target_env} 未登记或不可解析",
+                ) from exc
+
+        from aiops_diagnostics.common.platform_constants import DIFY_PLATFORM_WORKSPACE_ID
+        from aiops_diagnostics.dify.dify_workspaces import DIFY_WORKSPACE_UNRESOLVED
+
+        if tenant_id == DIFY_PLATFORM_WORKSPACE_ID:
+            platform_ws = ""
+            try:
+                platform_ws = context.dify_workspaces.resolve(DIFY_PLATFORM_WORKSPACE_ID, target_env)
+            except DifyWorkspaceError as exc:
+                if exc.code != DIFY_WORKSPACE_UNRESOLVED:
+                    raise StandardAPIError(
+                        exc.http_status, exc.code, exc.message, retryable=exc.retryable
+                    ) from exc
+            tenant_ws: list[str] = []
+            if reg_path:
+                from aiops_diagnostics.onboarding import registry as env_registry
+
+                with contextlib.suppress(env_registry.RegistryError):
+                    enabled_ids = sorted(
+                        env_registry.EnvironmentRegistry(reg_path, target_env).enabled_tenant_ids()
+                    )
+                    for tid in enabled_ids:
+                        with contextlib.suppress(DifyWorkspaceError, ValueError):
+                            ws = context.dify_workspaces.resolve(tid, target_env)
+                            if ws and ws not in tenant_ws:
+                                tenant_ws.append(ws)
+            workspace_ids = [
+                *([platform_ws] if platform_ws else []),
+                *[ws for ws in tenant_ws if ws != platform_ws],
+            ]
+            if not workspace_ids:
+                raise StandardAPIError(
+                    status.HTTP_404_NOT_FOUND,
+                    DIFY_WORKSPACE_UNRESOLVED,
+                    f"环境 {target_env} 还没有可用 workspace",
+                )
+            return {
+                "workspace_id": workspace_ids[0],
+                "workspace_ids": workspace_ids,
+                "environment": target_env,
+            }
+
         try:
-            workspace_id = context.dify_workspaces.resolve(tenant_id, context.settings.environment)
+            workspace_id = context.dify_workspaces.resolve(tenant_id, target_env)
         except DifyWorkspaceError as exc:
             raise StandardAPIError(exc.http_status, exc.code, exc.message, retryable=exc.retryable) from exc
         except ValueError as exc:
             raise StandardAPIError(
                 status.HTTP_400_BAD_REQUEST, "DIFY_WORKSPACE_TENANT_INVALID", str(exc)
             ) from exc
-        return {"workspace_id": workspace_id, "environment": context.settings.environment}
+        return {"workspace_id": workspace_id, "workspace_ids": [workspace_id], "environment": target_env}
 
     @app.post("/v1/dify/management/trial", status_code=202)
     def managed_consumer_trial(

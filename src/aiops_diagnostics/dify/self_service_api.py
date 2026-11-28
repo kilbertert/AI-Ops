@@ -155,14 +155,13 @@ def register(app, context):
         if "workspace" in vars(service):
             resolved = service.workspace(caller, payload.workspace_id)
             tenant, env = (
-                resolved if isinstance(resolved, tuple) else (resolved, context.settings.environment)
+                resolved
+                if isinstance(resolved, tuple)
+                else (resolved, getattr(caller, "environment", "") or context.settings.environment)
             )
         else:
             tenant, env = service.workspace_scope(caller, payload.workspace_id)
-        if env == context.settings.environment:
-            auth.require_target(context, caller, tenant)
-        else:
-            auth.require_environment_manager(context, caller, env)
+        auth.require_target(context, caller, tenant)
         from aiops_diagnostics.common.bounded_http import ErrorMapping, RequestSpec, json_body, request_json
 
         from .dify_inner_api import DifyInnerApi, InnerApiSettings
@@ -225,8 +224,8 @@ def register(app, context):
             return {
                 "can_diagnose": False,
                 "reason": (
-                    f"跨环境编辑模式：支持编辑与发布/回滚至 {env_name}；"
-                    "带真实订单的预览试运行请在对应业务环境执行"
+                    f"当前智能体运行于独立客户节点（{env_name}）：支持在此编辑提示词、配置知识库并直接发布/回滚生效；"
+                    "订单诊断请前往业务系统管家抽屉使用"
                 ),
             }
         if caller.tenant_id != row["tenant_id"]:

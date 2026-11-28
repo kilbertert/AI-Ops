@@ -690,6 +690,7 @@ def _assemble_overview(
     task_map: dict[str, list[dict[str, Any]]],
     *,
     tolerate_runtime_errors: bool = False,
+    session_environment: str = "",
 ) -> dict[str, Any]:
     settings = context.settings
     control_env = str(getattr(settings, "environment", "") or "")
@@ -808,6 +809,7 @@ def _assemble_overview(
     return _bound_overview_size(
         {
             "schema": OVERVIEW_SCHEMA,
+            "session_environment": session_environment or control_env,
             "control_environment": control_env if control_visible else "",
             "control_execution_environment": control_exec_env if control_visible else "",
             "control_version": gateway_version if control_visible else "",
@@ -819,21 +821,39 @@ def _assemble_overview(
     )
 
 
-def build_overview_locked(context: Any, registry_path: str, identity: tuple[str, str, str]) -> dict[str, Any]:
+def build_overview_locked(
+    context: Any,
+    registry_path: str,
+    identity: tuple[str, str, str],
+    *,
+    allowed_override: set[str] | None = None,
+) -> dict[str, Any]:
     """短时持锁读取目录/草稿/任务快照，锁外记忆化校验漂移并输出受预算保护的只读总览。"""
     reference = getattr(context.settings, "environment_onboarding_file", "")
     with drafts._locked(registry_path):
         body = registry.load(registry_path)
         if body["schema"] != registry.MANAGED_SCHEMA:
             raise registry.RegistryError("ENVIRONMENT_REGISTRY_MIGRATION_REQUIRED")
-        allowed = drafts.access(body, identity)
+        allowed = allowed_override if allowed_override is not None else drafts.access(body, identity)
         _, draft_only_ids, draft_map, raw_task_rows = _read_locked_snapshot(registry_path, allowed)
     task_map = _normalize_tasks(raw_task_rows, registry_path, reference)
-    return _assemble_overview(context, body, allowed, draft_only_ids, draft_map, task_map)
+    return _assemble_overview(
+        context,
+        body,
+        allowed,
+        draft_only_ids,
+        draft_map,
+        task_map,
+        session_environment=identity[0],
+    )
 
 
 def catalogue_with_overview(
-    context: Any, registry_path: str, identity: tuple[str, str, str]
+    context: Any,
+    registry_path: str,
+    identity: tuple[str, str, str],
+    *,
+    allowed_override: set[str] | None = None,
 ) -> dict[str, Any]:
     """在同一目录锁快照内产出 drafts 与受体积保护的总览，超限时自动省略内嵌总览以免锁死编辑。"""
     reference = getattr(context.settings, "environment_onboarding_file", "")
@@ -841,12 +861,13 @@ def catalogue_with_overview(
         body = registry.load(registry_path)
         if body["schema"] != registry.MANAGED_SCHEMA:
             raise registry.RegistryError("ENVIRONMENT_REGISTRY_MIGRATION_REQUIRED")
-        allowed = drafts.access(body, identity)
+        allowed = allowed_override if allowed_override is not None else drafts.access(body, identity)
         raw_draft_rows, draft_only_ids, draft_map, raw_task_rows = _read_locked_snapshot(
             registry_path, allowed
         )
     catalogue_result: dict[str, Any] = {
         "registry_revision": body["revision"],
+        "session_environment": identity[0],
         "can_create": "*" in allowed,
         "effective": [
             {k: v for k, v in r.items() if k != "config_ref"}
@@ -880,6 +901,7 @@ def catalogue_with_overview(
                 draft_map,
                 task_map,
                 tolerate_runtime_errors=True,
+                session_environment=identity[0],
             )
             overview = _bound_overview_size(overview, remaining_budget)
             catalogue_result["overview"] = overview if _encoded_size(overview) <= remaining_budget else None

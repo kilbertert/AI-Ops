@@ -138,6 +138,7 @@ type OverviewEnvironment = {
 }
 type EnvironmentOverview = {
   schema: string
+  session_environment?: string
   control_environment: string
   control_execution_environment: string
   control_version: string
@@ -147,6 +148,7 @@ type EnvironmentOverview = {
 }
 type Catalogue = {
   registry_revision: number
+  session_environment?: string
   can_create: boolean
   effective: Effective[]
   drafts: SavedDraft[]
@@ -780,6 +782,17 @@ export default function EnvironmentManagement() {
     }
   }
 
+  const switchEnvironmentLogin = async (envId: string) => {
+    if (!envId) return
+    setWorkspaceBusyKey(`switch:${envId}`)
+    try {
+      await fetch('/__aiops/login/logout', { method: 'POST', credentials: 'same-origin' })
+    } catch {
+      // 忽略退出抖动，直接跳转至目标环境登录页重新签发会话。
+    }
+    window.location.assign(`/signin?environment=${encodeURIComponent(envId)}`)
+  }
+
   const saved = data?.drafts.find((item) => item.environment === selected)
   const live = data?.effective.find((item) => item.id === selected)
   const dirty = draft !== null && JSON.stringify(draft) !== original
@@ -1007,9 +1020,21 @@ export default function EnvironmentManagement() {
     }
   }
 
+  const sessionEnv =
+    data?.session_environment || overview?.session_environment || overview?.control_environment || ''
+  const selectedOverview = overview?.environments.find((item) => item.id === selected) ?? null
+  const isScopedReadonly = Boolean(
+    data &&
+      !data.can_create &&
+      data.effective.length === 1 &&
+      sessionEnv &&
+      sessionEnv === data.effective[0]?.id &&
+      !selectedOverview?.is_control,
+  )
+
   useEffect(() => {
-    if (selected) void siteTasks({ environment: selected })
-  }, [selected, taskGeneration])
+    if (selected && !isScopedReadonly) void siteTasks({ environment: selected })
+  }, [selected, taskGeneration, isScopedReadonly])
 
   const preparing = tasks.some(
     (item) =>
@@ -1025,10 +1050,10 @@ export default function EnvironmentManagement() {
   )
 
   useEffect(() => {
-    if (!selected || !preparing) return
+    if (!selected || !preparing || isScopedReadonly) return
     const timer = setInterval(() => void siteTasks({ environment: selected }), 5000)
     return () => clearInterval(timer)
-  }, [selected, preparing])
+  }, [selected, preparing, isScopedReadonly])
 
   const rows = data
     ? [
@@ -1047,7 +1072,6 @@ export default function EnvironmentManagement() {
             (row.name || '').toLowerCase().includes(normalizedEnvQuery),
         )
       : rows
-  const selectedOverview = overview?.environments.find((item) => item.id === selected) ?? null
   const totalTenantsCount = overview?.environments.reduce((sum, e) => sum + e.tenant_count, 0) ?? 0
   const enabledTenantsCount =
     overview?.environments.reduce((sum, e) => sum + e.enabled_tenant_count, 0) ?? 0
@@ -1644,18 +1668,20 @@ export default function EnvironmentManagement() {
                           后台执行中 · 自动同步
                         </span>
                       )}
-                      <Button
-                        type="button"
-                        variant={showWizard ? 'secondary' : 'primary'}
-                        size="small"
-                        onClick={() => setShowWizard((v) => !v)}
-                      >
-                        <span
-                          aria-hidden="true"
-                          className={`mr-1.5 size-3.5 ${showWizard ? 'i-ri-close-line' : 'i-ri-magic-line'}`}
-                        />
-                        {showWizard ? '关闭自助向导' : '5 步自助开通向导'}
-                      </Button>
+                      {!isScopedReadonly && (
+                        <Button
+                          type="button"
+                          variant={showWizard ? 'secondary' : 'primary'}
+                          size="small"
+                          onClick={() => setShowWizard((v) => !v)}
+                        >
+                          <span
+                            aria-hidden="true"
+                            className={`mr-1.5 size-3.5 ${showWizard ? 'i-ri-close-line' : 'i-ri-magic-line'}`}
+                          />
+                          {showWizard ? '关闭自助向导' : '5 步自助开通向导'}
+                        </Button>
+                      )}
                     </div>
                   </div>
 
@@ -1679,37 +1705,47 @@ export default function EnvironmentManagement() {
                   )}
                 </div>
 
-                {/* 4 个主 Tab */}
+                {/* 主 Tab（客户环境只读视图仅显示本环境租户总览） */}
                 <div
                   role="tablist"
                   aria-label="工作区视图切换"
                   className="flex flex-wrap gap-6 border-t border-divider-subtle px-5 pt-1 sm:px-6"
                 >
                   {(
-                    [
-                      [
-                        'onboard',
-                        '开通与租户',
-                        'i-ri-rocket-line',
-                        activeTasksCount > 0 ? String(activeTasksCount) : '',
-                        false,
-                      ],
-                      ['releases', '版本与发版', 'i-ri-git-branch-line', '', false],
-                      [
-                        'config',
-                        '连接配置',
-                        'i-ri-settings-3-line',
-                        '',
-                        dirty || Boolean(saved?.registry_changed),
-                      ],
-                      [
-                        'ops',
-                        '运行与排查',
-                        'i-ri-pulse-line',
-                        tasks.length > 0 ? String(tasks.length) : '',
-                        false,
-                      ],
-                    ] as const
+                    (isScopedReadonly
+                      ? [
+                          [
+                            'onboard',
+                            '本环境租户',
+                            'i-ri-team-line',
+                            '',
+                            false,
+                          ],
+                        ]
+                      : [
+                          [
+                            'onboard',
+                            '开通与租户',
+                            'i-ri-rocket-line',
+                            activeTasksCount > 0 ? String(activeTasksCount) : '',
+                            false,
+                          ],
+                          ['releases', '版本与发版', 'i-ri-git-branch-line', '', false],
+                          [
+                            'config',
+                            '连接配置',
+                            'i-ri-settings-3-line',
+                            '',
+                            dirty || Boolean(saved?.registry_changed),
+                          ],
+                          [
+                            'ops',
+                            '运行与排查',
+                            'i-ri-pulse-line',
+                            tasks.length > 0 ? String(tasks.length) : '',
+                            false,
+                          ],
+                        ]) as readonly (readonly [WorkspaceTab, string, string, string, boolean])[]
                   ).map(([tab, label, iconClass, badge, warnDot], idx, list) => {
                     const isCurrent = !showWizard && activeTab === tab
                     return (
@@ -1805,8 +1841,8 @@ export default function EnvironmentManagement() {
                   aria-labelledby="aiops-tab-onboard"
                   className="space-y-5"
                 >
-                  {/* 1. 单一明确「下一步行动卡」 */}
-                  {!plan || dirty ? (
+                  {/* 1. 单一明确「下一步行动卡」（客户环境只读视图隐藏控制面草稿/预检卡） */}
+                  {!isScopedReadonly && (!plan || dirty ? (
                     <section
                       aria-label="下一步操作"
                       className={`aiops-glass-elevated rounded-2xl p-6 ${
@@ -2403,7 +2439,7 @@ export default function EnvironmentManagement() {
                         </section>
                       </div>
                     </section>
-                  )}
+                  ))}
 
                   {/* 2. 「租户状态」列表（默认隐藏 UUID，一键展开详情） */}
                   {selected && (
@@ -2514,42 +2550,64 @@ export default function EnvironmentManagement() {
 
                                     {tenant.workspace.id && (
                                       <div className="flex flex-wrap items-center gap-1.5">
-                                        <button
-                                          type="button"
-                                          disabled={workspaceBusyKey !== ''}
-                                          onClick={() =>
-                                            void openTenantWorkspace(tenant.workspace.id, false)
-                                          }
-                                          className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-divider-accent/40 bg-components-badge-bg-blue-light-soft px-2.5 py-1 system-xs-medium text-text-accent transition-colors hover:bg-state-accent-hover disabled:cursor-not-allowed disabled:opacity-60"
-                                        >
-                                          <span
-                                            aria-hidden="true"
-                                            className="i-ri-apps-2-line size-3.5"
-                                          />
-                                          <span>
-                                            {workspaceBusyKey === `${tenant.workspace.id}:apps`
-                                              ? '切换中…'
-                                              : '进入工作区'}
-                                          </span>
-                                        </button>
-                                        <button
-                                          type="button"
-                                          disabled={workspaceBusyKey !== ''}
-                                          onClick={() =>
-                                            void openTenantWorkspace(tenant.workspace.id, true)
-                                          }
-                                          className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-divider-subtle bg-components-panel-bg px-2.5 py-1 system-xs-medium text-text-secondary transition-colors hover:border-divider-regular hover:bg-background-section-burn hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-60"
-                                        >
-                                          <span
-                                            aria-hidden="true"
-                                            className="i-ri-book-open-line size-3.5"
-                                          />
-                                          <span>
-                                            {workspaceBusyKey === `${tenant.workspace.id}:kb`
-                                              ? '打开中…'
-                                              : '进入知识库'}
-                                          </span>
-                                        </button>
+                                        {!sessionEnv || selected === sessionEnv ? (
+                                          <>
+                                            <button
+                                              type="button"
+                                              disabled={workspaceBusyKey !== ''}
+                                              onClick={() =>
+                                                void openTenantWorkspace(tenant.workspace.id, false)
+                                              }
+                                              className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-divider-accent/40 bg-components-badge-bg-blue-light-soft px-2.5 py-1 system-xs-medium text-text-accent transition-colors hover:bg-state-accent-hover disabled:cursor-not-allowed disabled:opacity-60"
+                                            >
+                                              <span
+                                                aria-hidden="true"
+                                                className="i-ri-apps-2-line size-3.5"
+                                              />
+                                              <span>
+                                                {workspaceBusyKey === `${tenant.workspace.id}:apps`
+                                                  ? '切换中…'
+                                                  : '进入工作区'}
+                                              </span>
+                                            </button>
+                                            <button
+                                              type="button"
+                                              disabled={workspaceBusyKey !== ''}
+                                              onClick={() =>
+                                                void openTenantWorkspace(tenant.workspace.id, true)
+                                              }
+                                              className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-divider-subtle bg-components-panel-bg px-2.5 py-1 system-xs-medium text-text-secondary transition-colors hover:border-divider-regular hover:bg-background-section-burn hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                            >
+                                              <span
+                                                aria-hidden="true"
+                                                className="i-ri-book-open-line size-3.5"
+                                              />
+                                              <span>
+                                                {workspaceBusyKey === `${tenant.workspace.id}:kb`
+                                                  ? '打开中…'
+                                                  : '进入知识库'}
+                                              </span>
+                                            </button>
+                                          </>
+                                        ) : (
+                                          <button
+                                            type="button"
+                                            disabled={workspaceBusyKey !== ''}
+                                            title={`当前已登录 ${sessionEnv}，切换至 ${selected} 登录以独立管理该环境工作区与知识库`}
+                                            onClick={() => void switchEnvironmentLogin(selected)}
+                                            className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-divider-accent/40 bg-components-badge-bg-blue-light-soft px-2.5 py-1 system-xs-medium text-text-accent transition-colors hover:bg-state-accent-hover disabled:cursor-not-allowed disabled:opacity-60"
+                                          >
+                                            <span
+                                              aria-hidden="true"
+                                              className="i-ri-login-box-line size-3.5"
+                                            />
+                                            <span>
+                                              {workspaceBusyKey === `switch:${selected}`
+                                                ? '跳转中…'
+                                                : '切换至此环境登录'}
+                                            </span>
+                                          </button>
+                                        )}
                                       </div>
                                     )}
 
