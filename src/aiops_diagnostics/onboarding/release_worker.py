@@ -3,8 +3,8 @@
 设计原则：
 - **唯一路径**：新机冷装与已上线客户机升级/回滚统一走阿里云 ACR 不可变 `@sha256` 容器镜像，
   不再保留跨海 24 MiB tarball 与双轨 `venv` 分支；
-- **零字符串拼代码**：客户机动作全部收敛在可独立 lint/单测的
-  `ops/environments/gateway/host_release_agent.py`，
+- **零字符串拼代码**：客户机动作全部收敛在可独立 lint/单测且随包发布的
+  `src/aiops_diagnostics/onboarding/host_release_agent.py`，
   本模块仅通过 stdin 投递并解析返回的 JSON 结果；
 - **单向镜像真源**：镜像 `@sha256` 只从 GitHub Release `gateway-image.json`
   发现并写入 `release-catalog.json`。
@@ -30,7 +30,7 @@ from aiops_diagnostics.onboarding import (
     release_governance,
 )
 
-_AGENT_SCRIPT_PATH = Path(__file__).resolve().parents[3] / "ops/environments/gateway/host_release_agent.py"
+_AGENT_SCRIPT_PATH = Path(__file__).resolve().parent / "host_release_agent.py"
 _LAST_RELEASE_CATALOG_DIGEST = ""
 
 

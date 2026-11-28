@@ -326,6 +326,7 @@ _IOFORMAT_LEDGER = {
     "consumer/consumer_tool_grants.py",  # 节点请求的 expires_at 是 wire 合同
     "execution/chat_execution.py",  # 节点回调快照校验：合同要求**显式** UTC 偏移
     "health/health_report.py",  # 报告对外字段（started_at/stopped_at/data_as_of 是响应形状）
+    "onboarding/host_release_agent.py",  # 经 SSH 投递至客户机的纯标准库脚本（无包依赖）
     "operator/ops_analysis.py",  # `_iso_z`：API 响应合同（Z 后缀由合同定义）
     "operator/operator_cpms.py",  # wire expires_at + observed_at 显式偏移校验（同 chat_execution）
     "operator/station_pricing.py",  # `date.fromisoformat`：用户入参的日期类型，不是存储时间
@@ -336,6 +337,7 @@ _IOFORMAT_LEDGER = {
 #: 登录代理的 MappingStore 已独立迁至 `services/dify-login-proxy/`，不再位于 Gateway 包内。
 _CONNECT_LEDGER = {
     "gateway/gateway_db.py",
+    "onboarding/host_release_agent.py",  # 客户机纯标准库执行器，降权后读写客户机 gateway.db
 }
 
 #: 「存储时间/数值读取」形态的函数名——曾经七种拼写各是一处语法。

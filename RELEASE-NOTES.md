@@ -15,6 +15,11 @@
 > 不事后补写（事后凭 commit 标题重构「用户感知」是编造），历史缺口原样保留。
 > 当前缺口：`1.29.0`–`1.40.0`（截至 2026-11-23）。
 
+## [1.43.26] - 2026-11-28
+
+### Fixed
+- 将客户机执行器 `host_release_agent.py` 从 `ops/environments/gateway/` 迁入 `src/aiops_diagnostics/onboarding/` 随主包同步交付，修复 `deploy-41.sh` 仅打包 `src/aiops_diagnostics/` 导致 41 控制面调用 `release_worker` 与 `remote_app_management` 时找不到脚本（`ENVIRONMENT_HOST_UNREACHABLE`）的部署路径断链问题。
+
 ## [1.43.25] - 2026-11-28
 
 ### Fixed
