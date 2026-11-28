@@ -11,7 +11,7 @@ status: active
 管家端此前已具备充电订单详情、计费模板、车主应付账单核验（`cpms_order_billing` + `cpms_order_amount_check`）、过程统计、充电时间线、离线分析与通讯事件等 11 项只读工具，但缺少「场站商城清分结算金额分析」：
 
 1. **业务视角不同**：车主应付账单核验只验证用户实付电费、服务费、启动费与增值税；场站运营更关注充电单完结支付并拆单同步到商城（`qumall_mall.order_info.order_type='11'`、`order_item`、`shop_info`、`shop_level`）后的**订单结算金额、启动费服务费、支付通道费、平台总服务费与订单分佣基数**。
-2. **跨库结构与排序规则边界**：充电主库 `cloud_charging_pile` 与商城库 `qumall_mall` 分别使用 `utf8mb4_0900_ai_ci` 与 `utf8mb4_general_ci` 排序规则，跨库 SQL `JOIN` 会触发 `1267 Illegal mix of collations`；且实测 `41` 现网 `qumall_mall` 表结构中，`order_info` 无 `total_balance_reduce` 列，`order_item` 真实列名为 `commission_flag` 与 `goods_cost_price`，`shop_level` 使用 `deleted_at IS NULL` 软删而非 `del_flag`。
+2. **跨库结构与排序规则边界**：充电主库 `cloud_charging_pile` 与商城库 `qumall_mall` 分别使用 `utf8mb4_0900_ai_ci` 与 `utf8mb4_general_ci` 排序规则，跨库 SQL `JOIN` 会触发 `1267 Illegal mix of collations`；且实测 `41` 现网 `qumall_mall` 表结构中，`order_info` 无 `total_balance_reduce` 列，`order_item` 真实列名为 `commission_flag` 与 `goods_cost_price`，`shop_level` 使用 BIGINT `deleted_at` 软删（未删除有效行为 `deleted_at IS NULL OR deleted_at = 0`）而非 `del_flag`。
 3. **复杂清分口径与误报风险**：充电结算存在 3 种分账模式（电费单独结算 `0`、整笔订单跟随 `1`、电费跟随服务费结算 `2`）、通道费溢出扣减、附加费用（停车费/占枪费/安心充/预约费）、按电量定额抽成（`settleFeeOfElect > 0`）及退款等边界；同时商城未保留结算时刻的 `shop_level` 历史费率快照，宽表字段 `serviceAmountServiceFee` 会被汇总值覆盖。
 
 ## 决定

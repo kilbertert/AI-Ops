@@ -387,6 +387,7 @@ def _sample_records(
             "settle_fee": service_fee_rate,
             "rate_of_settle_fee_for_elect": order_rate,
             "settle_fee_of_elect": per_kwh_fee,
+            "deleted_at": 0,
             "config": json.dumps(
                 {
                     "insertGunFee": insert_gun_fee,
@@ -442,7 +443,7 @@ def test_mysql_operator_settlement_records_enforces_scope_and_consistent_snapsho
     assert "commission_flag" in item_sql and "goods_cost_price" in item_sql
     assert "is_commission" not in item_sql and "cost_amount" not in item_sql
     level_sql, _ = next((s, p) for s, p in conn.executed if "`shop_level`" in s)
-    assert "deleted_at IS NULL" in level_sql and "del_flag" not in level_sql
+    assert "(deleted_at IS NULL OR deleted_at = 0)" in level_sql and "del_flag" not in level_sql
 
 
 @pytest.mark.parametrize(
@@ -594,6 +595,39 @@ def test_verify_all_six_rules_pass_across_modes_and_rates(case_name, kwargs, exp
     assert "算术对照一致" in result["conclusion"]
     assert any("shop_level" in item for item in result["limitations"])
     assert any("实际银行打款到账" in item for item in result["limitations"])
+
+
+def test_verify_passes_with_null_shop_level_config_and_float_order_rate():
+    # 模拟 41 现网 PyMySQL 返回：deleted_at=0、config=None、rate_of_settle_fee_for_elect 为 float 0.3
+    detail, records = _sample_records(
+        electric_amount="2.25",
+        service_amount="2.25",
+        service_discount="0.00",
+        start_amount="0.00",
+        tax_amount="0.00",
+        rate_of_payment="0.006",
+        insert_gun_fee="0",
+        electricity_fee_rate="0",
+        service_fee_rate="3.000",
+        order_rate="0.3",
+        order_settlement_type=0,
+        elec_commission="0",
+    )
+    records["shop"]["configs"] = None
+    records["shop_level"]["config"] = None
+    records["shop_level"]["rate_of_settle_fee_for_elect"] = 0.3
+    records["shop_level"]["settle_fee_of_elect"] = 0.0
+    records["shop_level"]["deleted_at"] = 0
+
+    projected = order_settlement.project_settlement(records)
+    assert projected["fee_config"]["missing"] is False
+    assert projected["fee_config"]["rateOfSettleFeeForElect"] == "0.3"
+    result = order_settlement.verify(detail, projected)
+    assert all(c["status"] == "通过" for c in result["checks"]), result["checks"]
+    checks = _by_label(result)
+    assert checks["规则1 订单结算金额"]["calculated"] == Decimal("2.24")
+    assert checks["规则5 平台服务费"]["calculated"] == Decimal("0.01")
+    assert checks["规则6 订单分佣基数"]["calculated"] == Decimal("2.23")
 
 
 def test_rule2_start_fee_overflow_deduction_and_backend_unit_bug_detection():

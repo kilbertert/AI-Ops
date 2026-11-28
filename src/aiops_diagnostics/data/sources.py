@@ -503,7 +503,7 @@ class MySQLSource:
                         "SELECT id, tenant_id, level_name, settle_fee, "
                         "rate_of_settle_fee_for_elect, settle_fee_of_elect, config "
                         f"FROM `{mall_db}`.`shop_level` "
-                        "WHERE tenant_id=%s AND id=%s AND deleted_at IS NULL LIMIT 2",
+                        "WHERE tenant_id=%s AND id=%s AND (deleted_at IS NULL OR deleted_at = 0) LIMIT 2",
                         [tenant_id, level_id],
                     )
                     levels = cursor.fetchall()
